@@ -1,0 +1,958 @@
+/* ==========================================================================
+   Finances & Patrimoine (Togo - FCFA)
+   Thème Beige Prestige, Graphiques Vectoriels & Reçus d'Acomptes Imprimables
+   ========================================================================== */
+
+:root {
+  /* Nuances de Sable Chaud & Crème */
+  --bg-page: #fbf9f4;
+  --bg-card: #ffffff;
+  --bg-card-hover: #fbf8f2;
+  --bg-subtle: #f2ede2;
+  --bg-pill: #eae2d3;
+  --border-light: #e6dfd1;
+  --border-medium: #d4c8b6;
+
+  /* Typographie Haute Lisibilité */
+  --text-dark: #1f1b16;
+  --text-medium: #4e4438;
+  --text-muted: #7c7060;
+  --text-light: #9e9180;
+
+  /* Couleurs de prestige & opérateurs Togo */
+  --gold-primary: #9e7436;
+  --gold-light: #f7eedf;
+  --tmoney-red: #e60000;
+  --tmoney-bg: #fde8e8;
+  --moov-blue: #005baa;
+  --moov-bg: #e6f0fa;
+  --forest-green: #1d5c38;
+  --forest-green-bg: #eaf4ed;
+  --bordeaux-red: #9e2a2b;
+  --bordeaux-red-bg: #fae8e8;
+  --navy-blue: #1d3557;
+  --navy-blue-bg: #e9eef5;
+  --terracotta: #c45e32;
+  --terracotta-bg: #faeee7;
+
+  /* Ombres & Rayons */
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --shadow-subtle: 0 2px 10px rgba(50, 40, 25, 0.04);
+  --shadow-card: 0 4px 18px rgba(50, 40, 25, 0.06);
+  --shadow-float: 0 10px 30px rgba(50, 40, 25, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+body {
+  background-color: var(--bg-page);
+  color: var(--text-dark);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 84px;
+  line-height: 1.45;
+}
+
+/* Scrollbar soignée */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-page);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-medium);
+  border-radius: 4px;
+}
+
+/* ==================== EN-TÊTE ==================== */
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background-color: rgba(251, 249, 244, 0.94);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border-light);
+  padding: 12px 18px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.brand-badge {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-logo {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #9e7436, #7a5420);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  font-weight: 800;
+  font-size: 1.15rem;
+  box-shadow: 0 4px 14px rgba(158, 116, 54, 0.3);
+}
+
+.brand-title {
+  font-size: 1.12rem;
+  font-weight: 800;
+  color: var(--text-dark);
+  letter-spacing: -0.01em;
+}
+
+.brand-subtitle {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+}
+
+/* ==================== CONTENEUR PRINCIPAL ==================== */
+.main-content {
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 18px 16px;
+}
+
+.view-section {
+  display: none;
+  animation: fadeIn 0.2s ease-in-out;
+}
+.view-section.active {
+  display: block;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ==================== HERO CARD & TABLEAU DE BORD ==================== */
+.hero-card {
+  background: linear-gradient(150deg, #ffffff, #faf6ee);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  margin-bottom: 20px;
+  box-shadow: var(--shadow-card);
+  position: relative;
+  overflow: hidden;
+}
+
+.hero-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: linear-gradient(90deg, #9e7436, #d4a95d, #005baa);
+}
+
+.hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 20px;
+  background-color: var(--gold-light);
+  color: var(--gold-primary);
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+}
+
+.hero-main-amount {
+  font-size: 2.35rem;
+  font-weight: 850;
+  color: var(--text-dark);
+  letter-spacing: -0.02em;
+  margin-bottom: 18px;
+}
+
+.hero-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-light);
+}
+
+@media (max-width: 600px) {
+  .hero-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+}
+
+.hero-grid-item {
+  background-color: #ffffff;
+  border: 1px solid var(--border-subtle, #f0e9dc);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+}
+
+.hero-grid-label {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  display: block;
+  margin-bottom: 3px;
+  font-weight: 600;
+}
+
+.hero-grid-val {
+  font-size: 1.05rem;
+  font-weight: 750;
+}
+
+/* ==================== BARRE D'ACTIONS RAPIDES ==================== */
+.quick-action-bar {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+@media (max-width: 600px) {
+  .quick-action-bar {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.action-tile {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: 14px 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: var(--shadow-subtle);
+  text-align: center;
+}
+
+.action-tile:hover {
+  transform: translateY(-2px);
+  border-color: var(--gold-primary);
+  background-color: #ffffff;
+}
+
+.action-tile:active {
+  transform: scale(0.97);
+}
+
+.action-tile-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.35rem;
+}
+
+.action-tile-title {
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: var(--text-dark);
+}
+
+.action-tile-desc {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+
+/* ==================== SECTION DIAGRAMMES & GRAPHIQUES ==================== */
+.charts-section {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+@media (max-width: 720px) {
+  .charts-section {
+    grid-template-columns: 1fr;
+  }
+}
+
+.chart-card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: 18px;
+  box-shadow: var(--shadow-subtle);
+}
+
+.chart-card-title {
+  font-size: 0.92rem;
+  font-weight: 750;
+  color: var(--text-dark);
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.donut-chart-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  gap: 14px;
+}
+
+.donut-svg {
+  width: 140px;
+  height: 140px;
+  transform: rotate(-90deg);
+}
+
+.chart-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.78rem;
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 6px;
+}
+
+/* Barres de catégories */
+.bar-chart-container {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cat-bar-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cat-bar-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.76rem;
+  color: var(--text-dark);
+  font-weight: 600;
+}
+
+.cat-bar-bg {
+  width: 100%;
+  height: 8px;
+  background-color: var(--bg-subtle);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.cat-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #9e7436, #c45e32);
+}
+
+/* ==================== COMPTES & PORTEFEUILLES TOGO ==================== */
+.accounts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(215px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.account-tile {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  box-shadow: var(--shadow-subtle);
+  position: relative;
+  transition: border-color 0.15s ease;
+}
+
+.account-tile:hover {
+  border-color: var(--border-medium);
+}
+
+.account-tile-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.pill-tag {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.account-tile-name {
+  font-size: 0.94rem;
+  font-weight: 750;
+  color: var(--text-dark);
+  margin-bottom: 4px;
+}
+
+.account-tile-balance {
+  font-size: 1.25rem;
+  font-weight: 850;
+  color: var(--text-dark);
+}
+
+/* ==================== CARTES DE PRÊTS & EMPRUNTS ==================== */
+.loan-card {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: 18px;
+  margin-bottom: 14px;
+  box-shadow: var(--shadow-subtle);
+}
+
+.loan-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.loan-card-title {
+  font-size: 1rem;
+  font-weight: 750;
+  color: var(--text-dark);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.loan-card-sub {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-top: 3px;
+}
+
+.loan-card-amount {
+  font-size: 1.2rem;
+  font-weight: 850;
+  text-align: right;
+}
+
+.progress-container {
+  width: 100%;
+  height: 8px;
+  background-color: var(--bg-subtle);
+  border-radius: 4px;
+  margin: 10px 0 6px 0;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.progress-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+/* Historique des acomptes dans la carte */
+.repayments-history-box {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border-light);
+}
+
+.repayment-pill-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: var(--bg-page);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 0.76rem;
+  margin-bottom: 6px;
+}
+
+/* ==================== ACTIVITÉ & TRANSACTIONS ==================== */
+.tx-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tx-row {
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  transition: background-color 0.15s ease;
+}
+
+.tx-row:hover {
+  background-color: var(--bg-card-hover);
+}
+
+.tx-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.tx-icon-box {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.15rem;
+  flex-shrink: 0;
+}
+
+.tx-title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text-dark);
+}
+
+.tx-sub {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.tx-amount {
+  font-size: 0.98rem;
+  font-weight: 800;
+  text-align: right;
+}
+
+/* Filtres */
+.filter-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  margin-bottom: 14px;
+  scrollbar-width: none;
+}
+.filter-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.filter-tab {
+  padding: 7px 14px;
+  border-radius: 20px;
+  background-color: var(--bg-subtle);
+  border: 1px solid var(--border-light);
+  color: var(--text-medium);
+  font-size: 0.78rem;
+  font-weight: 650;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.filter-tab.active {
+  background-color: var(--text-dark);
+  color: #ffffff;
+  border-color: var(--text-dark);
+}
+
+/* ==================== BOUTONS ==================== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 0.86rem;
+  font-weight: 650;
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-primary {
+  background-color: var(--text-dark);
+  color: #ffffff;
+}
+.btn-primary:active {
+  background-color: #000000;
+  transform: scale(0.98);
+}
+
+.btn-gold {
+  background: linear-gradient(135deg, #9e7436, #7a5420);
+  color: #ffffff;
+}
+.btn-gold:active {
+  transform: scale(0.98);
+}
+
+.btn-secondary {
+  background-color: var(--bg-subtle);
+  border: 1px solid var(--border-medium);
+  color: var(--text-dark);
+}
+
+.btn-sm {
+  padding: 6px 12px;
+  font-size: 0.78rem;
+  border-radius: 6px;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-muted);
+}
+.btn-ghost:hover {
+  color: var(--text-dark);
+  background-color: var(--bg-subtle);
+}
+
+/* ==================== NAVIGATION BASSE ==================== */
+.bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 68px;
+  background-color: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(16px);
+  border-top: 1px solid var(--border-light);
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  z-index: 50;
+  padding: 0 8px;
+  box-shadow: 0 -4px 20px rgba(50, 40, 25, 0.06);
+}
+
+.nav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  text-decoration: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  flex: 1;
+  padding: 6px 0;
+  transition: color 0.15s ease;
+}
+
+.nav-item.active {
+  color: var(--gold-primary);
+  font-weight: 750;
+}
+
+.nav-icon {
+  font-size: 1.25rem;
+  margin-bottom: 2px;
+}
+
+.nav-add-btn {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #1f1b16, #3d352c);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.6rem;
+  box-shadow: 0 4px 14px rgba(31, 27, 22, 0.35);
+  margin-top: -22px;
+  border: 3px solid var(--bg-page);
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+.nav-add-btn:active {
+  transform: scale(0.92);
+}
+
+/* ==================== MODALS ==================== */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(31, 27, 22, 0.55);
+  backdrop-filter: blur(5px);
+  z-index: 100;
+  display: none;
+  align-items: flex-end;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+@media (min-width: 640px) {
+  .modal-overlay {
+    align-items: center;
+  }
+}
+
+.modal-overlay.active {
+  display: flex;
+  opacity: 1;
+}
+
+.modal-content {
+  background-color: #ffffff;
+  border-top-left-radius: var(--radius-lg);
+  border-top-right-radius: var(--radius-lg);
+  border: 1px solid var(--border-light);
+  width: 100%;
+  max-width: 540px;
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 22px;
+  box-shadow: var(--shadow-float);
+  animation: slideUp 0.22s ease-out;
+}
+
+@media (min-width: 640px) {
+  .modal-content {
+    border-radius: var(--radius-lg);
+  }
+}
+
+@keyframes slideUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 18px;
+}
+
+.modal-title {
+  font-size: 1.15rem;
+  font-weight: 750;
+  color: var(--text-dark);
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.5rem;
+  cursor: pointer;
+  padding: 4px;
+}
+
+.form-group {
+  margin-bottom: 14px;
+}
+
+.form-label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--text-medium);
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+
+.form-input, .form-select, .form-textarea {
+  width: 100%;
+  padding: 11px 14px;
+  background-color: var(--bg-page);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  color: var(--text-dark);
+  font-size: 0.95rem;
+  outline: none;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.form-input:focus, .form-select:focus, .form-textarea:focus {
+  border-color: var(--gold-primary);
+  background-color: #ffffff;
+}
+
+/* ==================== REÇU FINANCIER OFFICIEL & IMPRESSION PDF ==================== */
+.receipt-wrapper {
+  background-color: #ffffff;
+  border: 2px solid var(--border-medium);
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 16px;
+  position: relative;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+}
+
+.receipt-header {
+  text-align: center;
+  border-bottom: 2px solid var(--text-dark);
+  padding-bottom: 14px;
+  margin-bottom: 16px;
+}
+
+.receipt-republic {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 750;
+  color: var(--text-muted);
+}
+
+.receipt-type-badge {
+  display: inline-block;
+  padding: 6px 14px;
+  border-radius: 20px;
+  background-color: var(--gold-light);
+  color: var(--gold-primary);
+  font-size: 0.85rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 8px 0;
+}
+
+.receipt-no {
+  font-family: monospace;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.receipt-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+}
+
+.receipt-table th, .receipt-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-light);
+  font-size: 0.85rem;
+}
+
+.receipt-table th {
+  text-align: left;
+  color: var(--text-muted);
+  width: 45%;
+  font-weight: 600;
+}
+
+.receipt-table td {
+  text-align: right;
+  font-weight: 750;
+  color: var(--text-dark);
+}
+
+.receipt-highlight-row {
+  background-color: var(--gold-light);
+}
+
+.receipt-highlight-row th, .receipt-highlight-row td {
+  color: var(--gold-primary) !important;
+  font-size: 1.05rem !important;
+  font-weight: 850 !important;
+  border-top: 1px solid var(--gold-primary);
+  border-bottom: 1px solid var(--gold-primary);
+}
+
+.receipt-signatures {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 26px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-light);
+}
+
+.signature-box {
+  width: 45%;
+  text-align: center;
+}
+
+.signature-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 40px;
+}
+
+.signature-line {
+  border-top: 1px solid var(--text-dark);
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  padding-top: 4px;
+}
+
+/* ==================== RÈGLES D'IMPRESSION PRINT / PDF ==================== */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #printableReceiptArea, #printableReceiptArea * {
+    visibility: visible;
+  }
+  #printableReceiptArea {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    padding: 20px;
+    border: none;
+    box-shadow: none;
+  }
+  .no-print {
+    display: none !important;
+  }
+}

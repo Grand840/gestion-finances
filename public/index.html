@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Finances & Patrimoine Togo</title>
+
+  <!-- PWA Meta Tags -->
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#fbf9f4">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Finances TG">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+
+  <!-- Style CSS -->
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+
+  <!-- ==================== ÉCRAN DE VERROUILLAGE PIN ==================== -->
+  <div id="pinScreen" class="pin-screen no-print">
+    <div class="brand-logo" style="width: 54px; height: 54px; font-size: 1.4rem; margin-bottom: 14px;">🔒</div>
+    <h2 style="font-size: 1.25rem; font-weight: 800; margin-bottom: 4px; color: var(--text-dark);">Accès Sécurisé</h2>
+    <p style="color: var(--text-muted); font-size: 0.85rem;">Saisissez votre code PIN confidentiel</p>
+
+    <div id="pinDots" class="pin-dots">
+      <div class="pin-dot"></div>
+      <div class="pin-dot"></div>
+      <div class="pin-dot"></div>
+      <div class="pin-dot"></div>
+    </div>
+
+    <div class="pin-keyboard">
+      <button class="pin-key" onclick="App.handlePinKey('1')">1</button>
+      <button class="pin-key" onclick="App.handlePinKey('2')">2</button>
+      <button class="pin-key" onclick="App.handlePinKey('3')">3</button>
+      <button class="pin-key" onclick="App.handlePinKey('4')">4</button>
+      <button class="pin-key" onclick="App.handlePinKey('5')">5</button>
+      <button class="pin-key" onclick="App.handlePinKey('6')">6</button>
+      <button class="pin-key" onclick="App.handlePinKey('7')">7</button>
+      <button class="pin-key" onclick="App.handlePinKey('8')">8</button>
+      <button class="pin-key" onclick="App.handlePinKey('9')">9</button>
+      <button class="pin-key" onclick="App.handlePinKey('C')" style="font-size: 1.05rem; color: var(--bordeaux-red);">C</button>
+      <button class="pin-key" onclick="App.handlePinKey('0')">0</button>
+      <button class="pin-key" onclick="App.handlePinKey('DEL')" style="font-size: 1.1rem; color: var(--text-muted);">⌫</button>
+    </div>
+  </div>
+
+  <!-- ==================== EN-TÊTE HAUT DE GAMME ==================== -->
+  <header class="app-header no-print">
+    <div class="brand-badge">
+      <div class="brand-logo">TG</div>
+      <div>
+        <div class="brand-title">Finances & Patrimoine</div>
+        <div class="brand-subtitle">Lomé, Togo • T-Money, Moov & Banques</div>
+      </div>
+    </div>
+    <div style="display: flex; gap: 8px;">
+      <button class="btn btn-ghost btn-sm" onclick="App.loadInitialData()" title="Actualiser">🔄</button>
+      <button class="btn btn-ghost btn-sm" onclick="App.switchTab('settings')" title="Paramètres">⚙️</button>
+    </div>
+  </header>
+
+  <!-- ==================== CONTENU PRINCIPAL ==================== -->
+  <main class="main-content">
+
+    <!-- ==================== 1. VUE TABLEAU DE BORD ==================== -->
+    <section id="view-dashboard" class="view-section active">
+      
+      <!-- HERO CARD : CAPITAL PROPRE PERSONNEL -->
+      <div class="hero-card">
+        <div class="hero-badge">
+          <span>✨</span> MON CAPITAL PROPRE DISPONIBLE
+        </div>
+        <div id="dashRealAvailable" class="hero-main-amount">0 FCFA</div>
+
+        <div class="hero-grid">
+          <div class="hero-grid-item">
+            <span class="hero-grid-label">Total en Caisse (T-Money, Moov, Cash, Banque)</span>
+            <span id="dashTotalInHand" class="hero-grid-val" style="color: var(--navy-blue);">0 FCFA</span>
+          </div>
+          <div class="hero-grid-item">
+            <span class="hero-grid-label">Argent des Tiers (Sous séquestre)</span>
+            <span id="dashThirdParty" class="hero-grid-val" style="color: var(--terracotta);">- 0 FCFA</span>
+          </div>
+          <div class="hero-grid-item">
+            <span class="hero-grid-label">Reste Total Emprunts Dus</span>
+            <span id="dashBorrowedDue" class="hero-grid-val" style="color: var(--bordeaux-red);">0 FCFA</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- BARRE D'ACTIONS RAPIDES ERGONOMIQUES -->
+      <div class="quick-action-bar no-print">
+        <div class="action-tile" onclick="App.openModal('quickAddModal')">
+          <div class="action-tile-icon" style="background-color: var(--gold-light); color: var(--gold-primary);">💳</div>
+          <div class="action-tile-title">Opération</div>
+          <div class="action-tile-desc">Dépense / Entrée</div>
+        </div>
+
+        <div class="action-tile" onclick="App.openModal('loanGivenModal')">
+          <div class="action-tile-icon" style="background-color: var(--forest-green-bg); color: var(--forest-green);">🤝</div>
+          <div class="action-tile-title">Prêter de l'argent</div>
+          <div class="action-tile-desc">Sortie débitée</div>
+        </div>
+
+        <div class="action-tile" onclick="App.openModal('loanBorrowedModal')">
+          <div class="action-tile-icon" style="background-color: var(--bordeaux-red-bg); color: var(--bordeaux-red);">🏦</div>
+          <div class="action-tile-title">Faire un Emprunt</div>
+          <div class="action-tile-desc">Compte à part</div>
+        </div>
+
+        <div class="action-tile" onclick="App.openModal('thirdPartyModal')">
+          <div class="action-tile-icon" style="background-color: var(--terracotta-bg); color: var(--terracotta);">📦</div>
+          <div class="action-tile-title">Argent Tiers</div>
+          <div class="action-tile-desc">Séquestre / Achat</div>
+        </div>
+      </div>
+
+      <!-- SECTION NOUVEAU : DIAGRAMMES & GRAPHIQUES VISUELS -->
+      <div class="charts-section no-print">
+        <!-- Diagramme 1 : Donut Répartition des Liquidités (T-Money, Moov, Poche, Ecobank) -->
+        <div class="chart-card">
+          <div class="chart-card-title">
+            <span>📊 Répartition de ma Trésorerie</span>
+            <span style="font-size: 0.72rem; color: var(--text-muted);">Comptes Togo</span>
+          </div>
+          <div class="donut-chart-box">
+            <div id="donutChartSvg"></div>
+            <div id="donutLegend" class="chart-legend"></div>
+          </div>
+        </div>
+
+        <!-- Diagramme 2 : Répartition des Dépenses par Catégorie -->
+        <div class="chart-card">
+          <div class="chart-card-title">
+            <span>📈 Dépenses par Catégorie</span>
+            <span style="font-size: 0.72rem; color: var(--text-muted);">Ce mois</span>
+          </div>
+          <div id="categoriesBarChart" class="bar-chart-container"></div>
+        </div>
+      </div>
+
+      <!-- RÉCAPITULATIF CRÉANCES & FORTUNE -->
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 22px;">
+        <div class="account-tile" onclick="App.switchTab('loans-given')" style="cursor: pointer;">
+          <div class="account-tile-header">
+            <span class="pill-tag" style="background-color: var(--forest-green-bg); color: var(--forest-green);">PRÊTS ACCORDÉS</span>
+            <span>↗</span>
+          </div>
+          <div class="account-tile-name">Ce qu'on me doit (Dehors)</div>
+          <div id="dashGivenTotal" class="account-tile-balance" style="color: var(--forest-green);">0 FCFA</div>
+        </div>
+
+        <div class="account-tile" onclick="App.switchTab('assets')" style="cursor: pointer;">
+          <div class="account-tile-header">
+            <span class="pill-tag" style="background-color: var(--gold-light); color: var(--gold-primary);">PATRIMOINE GLOBAL</span>
+            <span>👑</span>
+          </div>
+          <div class="account-tile-name">Fortune Nette Totale</div>
+          <div id="dashNetWorth" class="account-tile-balance" style="color: var(--gold-primary);">0 FCFA</div>
+        </div>
+      </div>
+
+      <!-- COMPTES TOGO (T-MONEY, MOOV, POCHE, BANQUE) -->
+      <div class="chart-card-title" style="margin-bottom: 10px;">
+        <span style="font-size: 1rem;">Mes Portefeuilles Togo</span>
+        <button class="btn btn-ghost btn-sm" onclick="App.switchTab('accounts')">Gérer les comptes</button>
+      </div>
+      <div id="dashAccountsList" class="accounts-grid"></div>
+
+      <!-- ACTIVITÉ RÉCENTE -->
+      <div class="chart-card-title" style="margin: 22px 0 10px 0;">
+        <span style="font-size: 1rem;">Journal des Opérations</span>
+      </div>
+
+      <div class="filter-tabs no-print">
+        <button class="filter-tab active" data-filter="all">Toutes</button>
+        <button class="filter-tab" data-filter="expense">Dépenses</button>
+        <button class="filter-tab" data-filter="income">Entrées</button>
+        <button class="filter-tab" data-filter="transfer">Virements</button>
+        <button class="filter-tab" data-filter="loans">Prêts & Emprunts</button>
+        <button class="filter-tab" data-filter="thirdparty">Tiers</button>
+      </div>
+
+      <div id="dashRecentTransactions" class="tx-list"></div>
+    </section>
+
+    <!-- ==================== 2. VUE COMPTE EMPRUNTS REÇUS (DETTES) ==================== -->
+    <section id="view-loans-borrowed" class="view-section">
+      <div class="chart-card-title">
+        <div>
+          <span style="font-size: 1.15rem;">Compte Emprunts Reçus (Ce que je dois)</span>
+          <div style="font-size: 0.76rem; color: var(--text-muted); font-weight: normal; margin-top: 2px;">
+            Argent emprunté auprès d'une banque ou d'un tiers. Tirage du reçu PDF pour chaque acompte versé.
+          </div>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="App.openModal('loanBorrowedModal')">+ Nouvel Emprunt</button>
+      </div>
+      <div id="borrowedLoansList" style="margin-top: 14px;"></div>
+    </section>
+
+    <!-- ==================== 3. VUE COMPTE PRÊTS ACCORDÉS (CRÉANCES) ==================== -->
+    <section id="view-loans-given" class="view-section">
+      <div class="chart-card-title">
+        <div>
+          <span style="font-size: 1.15rem;">Compte Prêts Accordés (Ce qu'on me doit)</span>
+          <div style="font-size: 0.76rem; color: var(--text-muted); font-weight: normal; margin-top: 2px;">
+            Argent prêté à des proches ou collaborateurs. Débité de votre compte, avec quittance PDF pour chaque tranche encaissée.
+          </div>
+        </div>
+        <button class="btn btn-gold btn-sm" onclick="App.openModal('loanGivenModal')">+ Prêter de l'argent</button>
+      </div>
+      <div id="givenLoansList" style="margin-top: 14px;"></div>
+    </section>
+
+    <!-- ==================== 4. VUE COMPTES & PORTEFEUILLES TOGO ==================== -->
+    <section id="view-accounts" class="view-section">
+      <div class="chart-card-title">
+        <div>
+          <span style="font-size: 1.15rem;">Portefeuilles & Liquidités</span>
+          <div style="font-size: 0.76rem; color: var(--text-muted); font-weight: normal; margin-top: 2px;">
+            T-Money (Togocom), Moov Money Togo, Espèces dans ma poche, Ecobank Togo
+          </div>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="App.openModal('accountModal')">+ Nouveau Portefeuille</button>
+      </div>
+      <div id="accountsFullList" style="margin-top: 14px;"></div>
+    </section>
+
+    <!-- ==================== 5. VUE ARGENT DE TIERS ==================== -->
+    <section id="view-thirdparty" class="view-section">
+      <div class="chart-card-title">
+        <div>
+          <span style="font-size: 1.15rem;">Argent Confié par des Tiers</span>
+          <div style="font-size: 0.76rem; color: var(--text-muted); font-weight: normal; margin-top: 2px;">
+            Fonds sous séquestre pour commissions, chantiers ou garde. Exclus de votre disponible propre.
+          </div>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="App.openModal('thirdPartyModal')">+ Enregistrer un Dépôt</button>
+      </div>
+      <div id="thirdPartyList" style="margin-top: 14px;"></div>
+    </section>
+
+    <!-- ==================== 6. VUE ACTIFS & PATRIMOINE ==================== -->
+    <section id="view-assets" class="view-section">
+      <div class="chart-card-title">
+        <div>
+          <span style="font-size: 1.15rem;">Actifs & Biens de Valeur</span>
+          <div style="font-size: 0.76rem; color: var(--text-muted); font-weight: normal; margin-top: 2px;">
+            Motos, véhicules, parcelles/terrains à Lomé, tontines et stocks marchands
+          </div>
+        </div>
+        <button class="btn btn-gold btn-sm" onclick="App.openModal('assetModal')">+ Ajouter un Actif</button>
+      </div>
+      <div id="assetsList" class="tx-list" style="margin-top: 14px;"></div>
+    </section>
+
+    <!-- ==================== 7. VUE PARAMÈTRES ==================== -->
+    <section id="view-settings" class="view-section">
+      <div class="chart-card-title">
+        <span style="font-size: 1.15rem;">Paramètres & Sécurité</span>
+      </div>
+
+      <div class="loan-card" style="margin-top: 14px;">
+        <form id="settingsForm">
+          <div class="form-group">
+            <label class="form-label">Votre Nom</label>
+            <input type="text" id="settingUserName" class="form-input" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Devise Principale</label>
+            <select id="settingCurrency" class="form-select">
+              <option value="FCFA">Franc CFA (FCFA / XOF)</option>
+              <option value="EUR">Euro (€)</option>
+              <option value="USD">Dollar ($)</option>
+            </select>
+          </div>
+
+          <div class="form-group" style="padding-top: 12px; border-top: 1px solid var(--border-light); margin-top: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div>
+                <label class="form-label" style="margin-bottom: 2px;">Code PIN à l'ouverture</label>
+                <div style="font-size: 0.74rem; color: var(--text-muted);">Protection d'accès sur votre smartphone</div>
+              </div>
+              <input type="checkbox" id="settingPinToggle" style="width: 22px; height: 22px; accent-color: var(--gold-primary);">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Nouveau Code PIN (laisser vide pour ne pas changer)</label>
+            <input type="password" id="settingNewPin" class="form-input" placeholder="ex: 1234" maxlength="6">
+          </div>
+
+          <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 10px;">Enregistrer</button>
+        </form>
+      </div>
+
+      <div class="loan-card">
+        <h3 style="font-size: 0.98rem; font-weight: 750; margin-bottom: 6px;">Sauvegarde des données</h3>
+        <p style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 12px;">
+          Exportez l'intégralité de votre registre financier togolais en fichier JSON pour une sauvegarde hors ligne.
+        </p>
+        <button class="btn btn-secondary btn-sm" onclick="App.downloadBackup()">💾 Exporter la Sauvegarde JSON</button>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ==================== NAVIGATION BASSE ==================== -->
+  <nav class="bottom-nav no-print">
+    <button class="nav-item active" data-tab="dashboard">
+      <span class="nav-icon">📊</span>
+      <span>Accueil</span>
+    </button>
+    <button class="nav-item" data-tab="loans-borrowed">
+      <span class="nav-icon">🏦</span>
+      <span>Emprunts</span>
+    </button>
+    <button id="navAddBtn" class="nav-add-btn" title="Nouvelle opération">+</button>
+    <button class="nav-item" data-tab="loans-given">
+      <span class="nav-icon">🤝</span>
+      <span>Prêts</span>
+    </button>
+    <button class="nav-item" data-tab="accounts">
+      <span class="nav-icon">💳</span>
+      <span>Comptes</span>
+    </button>
+  </nav>
+
+  <!-- ==================== MODAL REÇU / QUITTANCE OFFICIELLE (IMPRESSION PDF) ==================== -->
+  <div id="receiptModal" class="modal-overlay">
+    <div class="modal-content" style="max-width: 620px;">
+      <div id="receiptModalContent"></div>
+    </div>
+  </div>
+
+  <!-- ==================== AUTRES MODALS ==================== -->
+
+  <!-- MODAL 1 : OPÉRATION RAPIDE -->
+  <div id="quickAddModal" class="modal-overlay no-print">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 class="modal-title">Nouvelle Opération</h3>
+        <button class="close-btn close-modal-btn">&times;</button>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 16px;">
+        <button type="button" class="btn btn-secondary quick-type-btn active" data-type="expense" style="font-size: 0.8rem;">Dépense</button>
+        <button type="button" class="btn btn-secondary quick-type-btn" data-type="income" style="font-size: 0.8rem;">Entrée</button>
+        <button type="button" class="btn btn-secondary quick-type-btn" data-type="transfer" style="font-size: 0.8rem;">Virement</button>
+      </div>
+
+      <form id="quickAddForm">
+        <input type="hidden" id="quickTransType" value="expense">
+
+        <div class="form-group">
+          <label class="form-label">Montant (FCFA)</label>
+          <input type="number" id="quickAmount" class="form-input" placeholder="ex: 15000" step="any" required autofocus>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Compte concerné</label>
+          <select id="quickAccount" class="form-select account-select" required></select>
+        </div>
+
+        <div id="quickToAccountGroup" class="form-group" style="display: none;">
+          <label class="form-label">Vers le compte (Destination)</label>
+          <select id="quickToAccount" class="form-select account-select"></select>
+        </div>
+
+        <div id="quickFeeGroup" class="form-group" style="display: none;">
+          <label class="form-label">Frais de retrait / transaction T-Money ou Moov</label>
+          <input type="number" id="quickFee" class="form-input" placeholder="0" value="0" step="any">
+        </div>
+
+        <div id="quickCategoryGroup" class="form-group">
+          <label class="form-label">Catégorie</label>
+          <select id="quickCategory" class="form-select">
+            <option value="Alimentation & Courses">Alimentation & Courses</option>
+            <option value="Transport & Carburant">Transport & Carburant</option>
+            <option value="Factures (CEET, TdE, Connexion)">Factures (CEET, TdE, Connexion)</option>
+            <option value="Loyer & Maison">Loyer & Maison</option>
+            <option value="Santé & Pharmacie">Santé & Pharmacie</option>
+            <option value="Loisirs & Sorties">Loisirs & Sorties</option>
+            <option value="Salaire & Honoraires">Salaire & Honoraires</option>
+            <option value="Commerce & Ventes">Commerce & Ventes</option>
+            <option value="Autre">Autre</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Détails / Description</label>
+          <input type="text" id="quickDescription" class="form-input" placeholder="ex: Courses grand marché de Lomé">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Date</label>
+          <input type="date" id="quickDate" class="form-input" required>
+        </div>
+
+        <button type="submit" class="btn btn-primary" style="width: 100%; padding: 12px; margin-top: 10px;">Valider</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL 2 : PRÊTER DE L'ARGENT (Sortie de compte) -->
+  <div id="loanGivenModal" class="modal-overlay no-print">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 class="modal-title">🤝 Prêter de l'argent</h3>
+        <button class="close-btn close-modal-btn">&times;</button>
+      </div>
+      <p style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 14px;">
+        La somme sera débitée du compte choisi et rejoindra votre compte de prêts accordés (argent dehors).
+      </p>
+      <form id="loanGivenForm">
+        <div class="form-group">
+          <label class="form-label">Nom de la personne à qui vous prêtez</label>
+          <input type="text" id="lgBorrower" class="form-input" placeholder="ex: Kodjo, Ami, Collègue..." required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Motif du prêt</label>
+          <input type="text" id="lgTitle" class="form-input" placeholder="ex: Dépannage urgence, Achat moto..." required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Montant Prêté (FCFA)</label>
+          <input type="number" id="lgAmount" class="form-input" placeholder="ex: 50000" step="any" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Compte débité (D'où sort l'argent ?)</label>
+          <select id="lgAccount" class="form-select account-select" required></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Date convenue de remboursement (optionnel)</label>
+          <input type="date" id="lgDueDate" class="form-input">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Remarques</label>
+          <input type="text" id="lgNotes" class="form-input" placeholder="ex: Remboursement en 2 tranches">
+        </div>
+        <button type="submit" class="btn btn-gold" style="width: 100%; padding: 12px; margin-top: 10px;">Enregistrer le Prêt</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL 3 : FAIRE UN EMPRUNT (Compte à part) -->
+  <div id="loanBorrowedModal" class="modal-overlay no-print">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 class="modal-title">🏦 Enregistrer un Emprunt</h3>
+        <button class="close-btn close-modal-btn">&times;</button>
+      </div>
+      <p style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 14px;">
+        Cet emprunt sera logé dans votre <strong>Compte Emprunts</strong>. Il ne viendra jamais gonfler artificiellement votre capital propre.
+      </p>
+      <form id="loanBorrowedForm">
+        <div class="form-group">
+          <label class="form-label">Prêteur (Banque, Ami, Tontine)</label>
+          <input type="text" id="lbLender" class="form-input" placeholder="ex: Ecobank Togo, Orabank, Tonton Yawo..." required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Objet / Intitulé de l'emprunt</label>
+          <input type="text" id="lbTitle" class="form-input" placeholder="ex: Avance trésorerie, Prêt personnel..." required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Montant Emprunté (FCFA)</label>
+          <input type="number" id="lbAmount" class="form-input" placeholder="ex: 200000" step="any" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Compte où l'argent a été versé (optionnel)</label>
+          <select id="lbAccount" class="form-select account-select">
+            <option value="">Aucun versement (fonds utilisés directement pour un achat/projet)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Date limite de remboursement (optionnel)</label>
+          <input type="date" id="lbDueDate" class="form-input">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Remarques</label>
+          <input type="text" id="lbNotes" class="form-input" placeholder="ex: Remboursement prévu par T-Money">
+        </div>
+        <button type="submit" class="btn btn-primary" style="width: 100%; padding: 12px; margin-top: 10px;">Créer l'Emprunt</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL 4 : REMBOURSER UN ACOMPTE D'EMPRUNT -->
+  <div id="repayLoanModal" class="modal-overlay no-print">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 class="modal-title">💸 Payer un Acompte d'Emprunt</h3>
+        <button class="close-btn close-modal-btn">&times;</button>
+      </div>
+      <div style="background-color: var(--bg-subtle); padding: 12px; border-radius: var(--radius-sm); margin-bottom: 14px;">
+        <div style="font-size: 0.85rem; font-weight: 750;" id="repayTitle"></div>
+        <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 2px;">
+          Reste actuellement dû : <strong id="repayRemainingText" style="color: var(--bordeaux-red);"></strong>
+        </div>
+      </div>
+      <form id="repayLoanForm">
+        <input type="hidden" id="repayLoanId">
+        <div class="form-group">
+          <label class="form-label">Montant de ce versement (FCFA)</label>
+          <input type="number" id="repayAmount" class="form-input" step="any" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Compte à débiter (D'où sort l'argent ?)</label>
+          <select id="repayAccount" class="form-select account-select" required></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Notes / Réf transaction (ex: Réf T-Money)</label>
+          <input type="text" id="repayNotes" class="form-input" placeholder="ex: Virement T-Money reçu le...">
+        </div>
+        <button type="submit" class="btn btn-primary" style="width: 100%; padding: 12px; margin-top: 10px;">Valider & Générer le Reçu PDF</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL 5 : ENCAISSER UN ACOMPTE DE PRÊT -->
+  <div id="receiveLoanModal" class="modal-overlay no-print">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 class="modal-title">💰 Encaisser un Acompte sur Prêt</h3>
+        <button class="close-btn close-modal-btn">&times;</button>
+      </div>
+      <div style="background-color: var(--bg-subtle); padding: 12px; border-radius: var(--radius-sm); margin-bottom: 14px;">
+        <div style="font-size: 0.85rem; font-weight: 750;" id="recvTitle"></div>
+        <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 2px;">
+          Reste à récupérer : <strong id="recvRemainingText" style="color: var(--forest-green);"></strong>
+        </div>
+      </div>
+      <form id="receiveLoanForm">
+        <input type="hidden" id="recvLoanId">
+        <div class="form-group">
+          <label class="form-label">Montant encaissé ce jour (FCFA)</label>
+          <input type="number" id="recvAmount" class="form-input" step="any" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Compte à créditer (Où déposez-vous l'argent ?)</label>
+          <select id="recvAccount" class="form-select account-select" required></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Notes</label>
+          <input type="text" id="recvNotes" class="form-input" placeholder="ex: Acompte remis en espèces">
+        </div>
+        <button type="submit" class="btn btn-gold" style="width: 100%; padding: 12px; margin-top: 10px;">Valider & Générer la Quittance PDF</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL 6 : NOUVEAU COMPTE TOGO -->
+  <div id="accountModal" class="modal-overlay no-print">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 class="modal-title">Nouveau Portefeuille</h3>
+        <button class="close-btn close-modal-btn">&times;</button>
+      </div>
+      <form id="accountForm">
+        <div class="form-group">
+          <label class="form-label">Nom du compte</label>
+          <input type="text" id="accName" class="form-input" placeholder="ex: T-Money 2, Moov Money, Orabank, UTB..." required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Type</label>
+          <select id="accType" class="form-select">
+            <option value="momo">Mobile Money (T-Money, Moov Money)</option>
+            <option value="cash">Espèces (Dans ma poche / Coffre)</option>
+            <option value="bank">Compte Bancaire (Ecobank, Orabank...)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Solde Initial (FCFA)</label>
+          <input type="number" id="accBalance" class="form-input" value="0" step="any" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Numéro Téléphone / RIB (optionnel)</label>
+          <input type="text" id="accNumber" class="form-input" placeholder="ex: +228 90 ...">
+        </div>
+        <button type="submit" class="btn btn-primary" style="width: 100%; padding: 12px; margin-top: 10px;">Créer le Portefeuille</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL 7 : ARGENT DE TIERS -->
+  <div id="thirdPartyModal" class="modal-overlay no-print">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 class="modal-title">📦 Argent Confié par un Tiers</h3>
+        <button class="close-btn close-modal-btn">&times;</button>
+      </div>
+      <p style="font-size: 0.78rem; color: var(--text-muted); margin-bottom: 14px;">
+        Cet argent sera déposé sur le compte choisi mais restera <strong>strictement exclu</strong> de votre capital propre disponible.
+      </p>
+      <form id="thirdPartyForm">
+        <div class="form-group">
+          <label class="form-label">Nom du propriétaire des fonds</label>
+          <input type="text" id="tpfPerson" class="form-input" placeholder="ex: Kofi, Tonton Yawo, Client X..." required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Téléphone (optionnel)</label>
+          <input type="tel" id="tpfPhone" class="form-input" placeholder="ex: +228 91 ...">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Mission / Motif</label>
+          <input type="text" id="tpfReason" class="form-input" placeholder="ex: Achat ciment, Garde voyage..." required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Montant Confié (FCFA)</label>
+          <input type="number" id="tpfAmount" class="form-input" placeholder="ex: 100000" step="any" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Compte où vous recevez cet argent</label>
+          <select id="tpfAccount" class="form-select account-select" required></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Date</label>
+          <input type="date" id="tpfDate" class="form-input" required>
+        </div>
+        <button type="submit" class="btn btn-primary" style="width: 100%; padding: 12px; margin-top: 10px;">Enregistrer le Séquestre</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL 8 : RESTITUTION TIERS -->
+  <div id="refundModal" class="modal-overlay no-print">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 class="modal-title">Restitution à <span id="refPersonName"></span></h3>
+        <button class="close-btn close-modal-btn">&times;</button>
+      </div>
+      <form id="refundForm">
+        <input type="hidden" id="refFundId">
+        <div class="form-group">
+          <label class="form-label">Montant restitué (FCFA)</label>
+          <input type="number" id="refAmount" class="form-input" step="any" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Compte débité (D'où sort l'argent ?)</label>
+          <select id="refAccount" class="form-select account-select" required></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Notes</label>
+          <input type="text" id="refNotes" class="form-input" placeholder="ex: Reliquat remis en mains propres">
+        </div>
+        <button type="submit" class="btn btn-primary" style="width: 100%; padding: 12px; margin-top: 10px;">Confirmer la Restitution</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL 9 : NOUVEL ACTIF -->
+  <div id="assetModal" class="modal-overlay no-print">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 class="modal-title">Ajouter un Actif au Patrimoine</h3>
+        <button class="close-btn close-modal-btn">&times;</button>
+      </div>
+      <form id="assetForm">
+        <div class="form-group">
+          <label class="form-label">Désignation du bien</label>
+          <input type="text" id="assetName" class="form-input" placeholder="ex: Moto Haojue, Ordinateur, Terrain à Agoè..." required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Catégorie</label>
+          <select id="assetCat" class="form-select">
+            <option value="material">Biens matériels (Moto, Véhicule, Tech)</option>
+            <option value="real_estate">Immobilier / Terrain / Parcelle</option>
+            <option value="investment">Placements / Tontine bloquée / DAT</option>
+            <option value="inventory">Stock de marchandises commerciales</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Prix d'acquisition (FCFA)</label>
+          <input type="number" id="assetPurchaseVal" class="form-input" step="any" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Valeur actuelle estimée (FCFA)</label>
+          <input type="number" id="assetCurrentVal" class="form-input" step="any">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Date d'achat</label>
+          <input type="date" id="assetDate" class="form-input">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Notes</label>
+          <input type="text" id="assetNotes" class="form-input" placeholder="ex: Titre foncier en cours">
+        </div>
+        <button type="submit" class="btn btn-gold" style="width: 100%; padding: 12px; margin-top: 10px;">Ajouter à mon patrimoine</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="/js/api.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>
