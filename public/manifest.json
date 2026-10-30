@@ -1,12 +1,11 @@
 {
-  "name": "Gestion Finances & Patrimoine",
-  "short_name": "Mes Finances",
-  "description": "Application personnelle de gestion multi-comptes, Mobile Money, Tiers, Dettes et Actifs",
+  "name": "Sillage — Vos finances, en clair",
+  "short_name": "Sillage",
+  "description": "Vos comptes, prêts, emprunts et patrimoine réunis dans un espace clair.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0f172a",
-  "theme_color": "#0f172a",
-  "orientation": "portrait-primary",
+  "background_color": "#f6f7f9",
+  "theme_color": "#184f42",
   "icons": [
     {
       "src": "/icons/icon-192.png",
