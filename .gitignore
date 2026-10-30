@@ -1,2 +1,6 @@
 __pycache__/
 *.db
+*.db-wal
+*.db-shm
+node_modules/
+test-results/

@@ -378,9 +378,9 @@ class FinanceRequestHandler(http.server.SimpleHTTPRequestHandler):
 def main():
     socketserver.TCPServer.allow_reuse_address = True
     with socketserver.TCPServer(("0.0.0.0", PORT), FinanceRequestHandler) as httpd:
-        print(f"🚀 Serveur Financier Togo démarré")
+        print("Sillage — Vos finances, en clair")
         print(f"📍 PC : http://localhost:{PORT}")
-        print(f"📱 Mobile : http://192.168.3.61:{PORT}")
+        print(f"Réseau : port {PORT}, toutes interfaces (réseau de confiance uniquement)")
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:

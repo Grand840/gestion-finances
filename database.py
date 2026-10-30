@@ -182,8 +182,8 @@ def get_dashboard_metrics():
 
     # 2. Argent des tiers confié (séquestre)
     c.execute("""
-    SELECT COALESCE(SUM(initial_amount - spent_amount - returned_amount), 0) 
-    FROM third_party_funds 
+    SELECT COALESCE(SUM(initial_amount - spent_amount - returned_amount), 0)
+    FROM third_party_funds
     WHERE status = 'active'
     """)
     third_party_held = c.fetchone()[0]
@@ -200,8 +200,9 @@ def get_dashboard_metrics():
     c.execute("SELECT COALESCE(SUM(current_value), 0) FROM assets")
     total_assets = c.fetchone()[0]
 
-    # 6. MON CAPITAL PROPRE DISPONIBLE (Fonds 100% à moi, hors argent de tiers)
-    real_available_cash = max(0.0, total_cash_in_hand - third_party_held)
+    # 6. Fonds propres liquides : les emprunts ne sont pas du capital personnel.
+    # Conserver un montant négatif pour rendre visible un déficit de couverture.
+    real_available_cash = total_cash_in_hand - third_party_held - total_borrowed_due
 
     # 7. FORTUNE / PATRIMOINE NET
     net_worth = (total_cash_in_hand - third_party_held - total_borrowed_due) + total_loans_given_due + total_assets
@@ -212,11 +213,13 @@ def get_dashboard_metrics():
 
     # Données pour diagramme des dépenses par catégorie
     c.execute("""
-    SELECT category, COALESCE(SUM(amount), 0) as total 
-    FROM transactions 
-    WHERE type = 'expense' 
-    GROUP BY category 
-    ORDER BY total DESC 
+    SELECT category, COALESCE(SUM(amount + fee), 0) as total
+    FROM transactions
+    WHERE type = 'expense'
+      AND related_loan_id IS NULL
+      AND third_party_fund_id IS NULL
+    GROUP BY category
+    ORDER BY total DESC
     LIMIT 6
     """)
     categories_distribution = [dict(row) for row in c.fetchall()]
@@ -456,15 +459,15 @@ def get_receipt_data(repayment_id):
 
     c.execute("""
     SELECT r.*, a.name as account_name, a.type as account_type,
-           CASE 
+           CASE
              WHEN r.loan_type = 'borrowed' THEN (SELECT lender_name FROM loans_borrowed lb WHERE lb.id = r.loan_id)
              ELSE (SELECT borrower_name FROM loans_given lg WHERE lg.id = r.loan_id)
            END as contact_name,
-           CASE 
+           CASE
              WHEN r.loan_type = 'borrowed' THEN (SELECT title FROM loans_borrowed lb WHERE lb.id = r.loan_id)
              ELSE (SELECT title FROM loans_given lg WHERE lg.id = r.loan_id)
            END as loan_title,
-           CASE 
+           CASE
              WHEN r.loan_type = 'borrowed' THEN (SELECT initial_amount FROM loans_borrowed lb WHERE lb.id = r.loan_id)
              ELSE (SELECT initial_amount FROM loans_given lg WHERE lg.id = r.loan_id)
            END as initial_amount

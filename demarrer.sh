@@ -5,7 +5,7 @@ DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$DIR"
 
 echo "=========================================================="
-echo "  💰 Application Gestion Finances & Patrimoine (PWA)"
+echo "  Sillage — Vos finances, en clair"
 echo "=========================================================="
 
 IP=$(hostname -I | awk '{print $1}')
