@@ -200,6 +200,15 @@ const fs = require("node:fs/promises");
     });
     await submit("passwordForm", "/api/auth/password");
     await page.evaluate(() => App.switchTab("dashboard"));
+    await page.waitForFunction(() => navigator.serviceWorker.controller);
+    assert.equal(
+      await page.evaluate(async () => {
+        const response = await fetch("/api%2Fexport");
+        await response.json();
+        return response.status;
+      }),
+      200,
+    );
     if (screenshots)
       await page.screenshot({
         path: path.join(root, "test-results/dashboard.png"),
