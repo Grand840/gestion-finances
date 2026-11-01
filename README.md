@@ -117,7 +117,7 @@ Le code affiché est un secret personnel : ne le copiez pas dans les logs partag
 ./scripts/restore.sh backups/sillage-AAAAMMJJ-HHMMSS.dump
 ```
 
-La restauration demande confirmation, arrête l’application, remplace les objets dans une transaction invalide les sessions et les codes en attente, puis redémarre l’application. **Testez une restauration sur une instance distincte avant de compter sur vos sauvegardes.** Une sauvegarde contient les informations financières et les empreintes de mots de passe : chiffrez-la et copiez-la sur un autre support avec accès restreint. Le volume Docker seul n’est pas une sauvegarde. L’export JSON personnel est consultable mais aucun import JSON n’est fourni.
+La restauration demande confirmation, arrête l’application, remplace les objets dans une transaction, invalide les sessions et les codes en attente, puis redémarre l’application. **Testez une restauration sur une instance distincte avant de compter sur vos sauvegardes.** Une sauvegarde contient les informations financières et les empreintes de mots de passe : chiffrez-la et copiez-la sur un autre support avec accès restreint. Le volume Docker seul n’est pas une sauvegarde. L’export JSON personnel est consultable mais aucun import JSON n’est fourni.
 
 Pour mettre à jour : sauvegardez, récupérez le code, puis `docker compose up -d --build`. Conservez `.env`. Ne lancez pas `docker compose down -v` sur des données à conserver : cela supprime les volumes.
 
@@ -135,7 +135,7 @@ npx playwright install chromium
 PYTHON=.venv/bin/python npm run test:ui
 ```
 
-Les tests utilisent de vrais serveurs PostgreSQL temporaires via `pgserver`, et **ne touchent jamais aux données de votre installation**. Le navigateur vérifie l’isolation entre membres, les écritures, les prêts, les reçus PDF, le détail des comptes, les invitations, la récupération d’accès et cinq tailles d’écran. `BROWSER_EXECUTABLE_PATH` et `BROWSER_ARGS` permettent d’utiliser un navigateur existant.
+Les tests utilisent de vrais serveurs PostgreSQL temporaires via `pgserver`, et **ne touchent jamais aux données de votre installation**. La CI GitHub construit et démarre aussi les conteneurs, vérifie les écritures/PDF avec le rôle SQL applicatif, puis sauvegarde et restaure la base éphémère. Ces contrôles ne remplacent pas une restauration vérifiée sur votre propre serveur. Le navigateur vérifie l’isolation entre membres, les écritures, les prêts, les reçus PDF, le détail des comptes, les invitations, la récupération d’accès et cinq tailles d’écran. `BROWSER_EXECUTABLE_PATH` et `BROWSER_ARGS` permettent d’utiliser un navigateur existant.
 
 Pour un aperçu local de développement sans Docker, après avoir installé les dépendances de développement et généré `.env` : `python scripts/local-preview.py`. Cette commande utilise un PostgreSQL local sous `.local/`, distinct du volume Docker ; elle n’est pas une méthode de déploiement de production.
 

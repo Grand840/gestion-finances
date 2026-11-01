@@ -9,11 +9,11 @@ jobs:
   tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           cache: npm
@@ -28,5 +28,16 @@ jobs:
       - run: docker compose config --quiet
       - run: docker compose up -d --build --wait db app
       - run: curl --fail http://localhost:8080/api/health
+      - run: python tests/docker-smoke.py
+        env:
+          SILLAGE_CI_SMOKE: "1"
+      - name: Tester sauvegarde et restauration Docker
+        run: |
+          ./scripts/backup.sh
+          printf 'RESTAURER\n' | ./scripts/restore.sh "$(find backups -name '*.dump' -print -quit)"
+          docker compose up -d --wait db app
+          python tests/docker-smoke.py --verify
+        env:
+          SILLAGE_CI_SMOKE: "1"
       - if: always()
         run: docker compose down
