@@ -7,7 +7,7 @@
 
     <!-- PWA Meta Tags -->
     <link rel="manifest" href="/manifest.json" />
-    <meta name="theme-color" content="#f6f7f9" />
+    <meta name="theme-color" content="#153f33" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Sillage" />
@@ -17,86 +17,156 @@
     <link rel="icon" href="/icons/mark.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="/css/app.css" />
     <link rel="stylesheet" href="/css/sillage.css" />
+    <link rel="stylesheet" href="/css/family.css" />
   </head>
-  <body>
-    <!-- ==================== ÉCRAN DE VERROUILLAGE PIN ==================== -->
-    <div
-      id="pinScreen"
-      class="pin-screen no-print"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Espace verrouillé"
-    >
-      <div
-        class="brand-logo"
-        style="
-          width: 54px;
-          height: 54px;
-          font-size: 1.4rem;
-          margin-bottom: 14px;
-        "
-      >
-        <svg class="icon" aria-hidden="true">
-          <use href="/icons/sprite.svg#lock"></use>
-        </svg>
-      </div>
-      <h2
-        style="
-          font-size: 1.25rem;
-          font-weight: 800;
-          margin-bottom: 4px;
-          color: var(--text-dark);
-        "
-      >
-        Espace verrouillé
-      </h2>
-      <p style="color: var(--text-muted); font-size: 0.85rem">
-        Saisissez votre code PIN (4 à 6 chiffres)
-      </p>
-
-      <div id="pinDots" class="pin-dots">
-        <div class="pin-dot"></div>
-        <div class="pin-dot"></div>
-        <div class="pin-dot"></div>
-        <div class="pin-dot"></div>
-        <div class="pin-dot"></div>
-        <div class="pin-dot"></div>
-      </div>
-
-      <div class="pin-keyboard">
-        <button class="pin-key" onclick="App.handlePinKey('1')">1</button>
-        <button class="pin-key" onclick="App.handlePinKey('2')">2</button>
-        <button class="pin-key" onclick="App.handlePinKey('3')">3</button>
-        <button class="pin-key" onclick="App.handlePinKey('4')">4</button>
-        <button class="pin-key" onclick="App.handlePinKey('5')">5</button>
-        <button class="pin-key" onclick="App.handlePinKey('6')">6</button>
-        <button class="pin-key" onclick="App.handlePinKey('7')">7</button>
-        <button class="pin-key" onclick="App.handlePinKey('8')">8</button>
-        <button class="pin-key" onclick="App.handlePinKey('9')">9</button>
-        <button
-          class="pin-key"
-          onclick="App.handlePinKey('C')"
-          style="font-size: 1.05rem; color: var(--bordeaux-red)"
+  <body class="auth-pending">
+    <section id="authScreen" class="auth-screen" aria-label="Accès à Sillage">
+      <div class="auth-story">
+        <a class="brand auth-brand" href="#"
+          ><span class="brand-mark"
+            ><svg class="icon" aria-hidden="true">
+              <use href="/icons/sprite.svg#mark"></use></svg></span
+          ><span>Sillage<small>VOS FINANCES, EN CLAIR</small></span></a
         >
-          C
-        </button>
-        <button class="pin-key" onclick="App.handlePinKey('0')">0</button>
-        <button
-          class="pin-key"
-          onclick="App.handlePinKey('DEL')"
-          style="font-size: 1.1rem; color: var(--text-muted)"
-        >
-          ⌫
-        </button>
+        <div class="auth-story-content">
+          <span class="auth-overline"
+            >UN ESPACE À VOUS. UN HORIZON COMMUN.</span
+          >
+          <h1>La sérénité<br />se construit<br /><em>au quotidien.</em></h1>
+          <p>
+            Comptes, engagements, patrimoine.<br />Retrouvez le fil de vos
+            finances dans un espace personnel, pensé pour la vie de famille.
+          </p>
+          <div class="auth-promise">
+            <svg class="icon" aria-hidden="true">
+              <use href="/icons/sprite.svg#shield"></use>
+            </svg>
+            <div>
+              <strong>Une famille. Des espaces privés.</strong
+              ><span>Vos finances ne sont visibles que par vous.</span>
+            </div>
+          </div>
+        </div>
+        <span class="auth-story-footer">Moins de flou. Plus de liberté.</span>
+        <div class="auth-orbit" aria-hidden="true"></div>
       </div>
-      <button
-        class="btn btn-primary pin-submit"
-        onclick="App.handlePinKey('OK')"
-      >
-        Déverrouiller
-      </button>
-    </div>
-
+      <div class="auth-form-side">
+        <div class="auth-form-wrap">
+          <span class="auth-small-label">BIENVENUE CHEZ VOUS</span>
+          <h2 id="authTitle">Heureux de vous retrouver.</h2>
+          <p id="authSubtitle">Connectez-vous à votre espace personnel.</p>
+          <div class="auth-tabs" role="group" aria-label="Choisir un accès">
+            <button
+              type="button"
+              id="loginTab"
+              class="active"
+              onclick="Family.authMode('login')"
+            >
+              Se connecter</button
+            ><button
+              type="button"
+              id="registerTab"
+              onclick="Family.authMode('register')"
+            >
+              Créer un compte
+            </button>
+          </div>
+          <div id="authNotice" class="auth-notice" role="status">
+            Vérification de la connexion au serveur…
+          </div>
+          <form id="authForm">
+            <div class="form-group register-only" hidden>
+              <label for="authName" class="form-label">Votre nom</label
+              ><input
+                id="authName"
+                class="form-input"
+                autocomplete="name"
+                maxlength="80"
+                minlength="2"
+                placeholder="Prénom et nom"
+              />
+            </div>
+            <div class="form-group">
+              <label for="authEmail" class="form-label">Adresse e-mail</label
+              ><input
+                id="authEmail"
+                class="form-input"
+                type="email"
+                autocomplete="username"
+                required
+                maxlength="254"
+                placeholder="vous@exemple.fr"
+              />
+            </div>
+            <div class="form-group">
+              <label for="authPassword" class="form-label">Mot de passe</label>
+              <div class="password-field">
+                <input
+                  id="authPassword"
+                  class="form-input"
+                  type="password"
+                  autocomplete="current-password"
+                  required
+                  maxlength="128"
+                  placeholder="Votre mot de passe"
+                /><button
+                  type="button"
+                  onclick="Family.togglePassword()"
+                  aria-label="Afficher ou masquer le mot de passe"
+                >
+                  Afficher
+                </button>
+              </div>
+              <small class="register-only" hidden
+                >Au moins 12 caractères. Une phrase de passe est
+                recommandée.</small
+              >
+            </div>
+            <div class="form-group register-only" hidden>
+              <label for="authCode" id="authCodeLabel" class="form-label"
+                >Code d’invitation</label
+              ><input
+                id="authCode"
+                class="form-input"
+                autocomplete="off"
+                maxlength="160"
+                placeholder="Code transmis en privé"
+              /><small
+                >Chaque invitation est personnelle et utilisable une seule
+                fois.</small
+              >
+            </div>
+            <button
+              class="btn btn-primary auth-submit"
+              id="authSubmit"
+              type="submit"
+              disabled
+            >
+              Se connecter <span aria-hidden="true">→</span>
+            </button>
+          </form>
+          <p class="auth-help">
+            Un accès oublié ? Contactez l’administrateur familial. Aucun mot de
+            passe n’est envoyé par e-mail.
+            <button
+              type="button"
+              class="text-link recovery-link"
+              onclick="Family.authMode('recover')"
+            >
+              Réinitialiser avec un code
+            </button>
+          </p>
+          <div class="auth-trust">
+            <svg class="icon" aria-hidden="true">
+              <use href="/icons/sprite.svg#lock"></use></svg
+            >Session privée · Données sur votre serveur
+          </div>
+        </div>
+        <span class="auth-form-footer"
+          >Sillage <span>·</span> L’essentiel, en confiance.</span
+        >
+      </div>
+    </section>
     <aside class="sidebar no-print" id="sidebar" aria-label="Menu principal">
       <a class="brand" href="#dashboard" aria-label="Sillage, accueil"
         ><span class="brand-mark"
@@ -169,6 +239,16 @@
             <use href="/icons/sprite.svg#settings"></use></svg
           ><span>Paramètres</span>
         </button>
+        <button class="nav-item admin-only" data-tab="admin" hidden>
+          <svg class="icon" aria-hidden="true">
+            <use href="/icons/sprite.svg#users"></use></svg
+          ><span>Gestion de la famille</span>
+        </button>
+        <button class="nav-item logout-button" onclick="Family.logout()">
+          <svg class="icon" aria-hidden="true">
+            <use href="/icons/sprite.svg#arrow-right"></use></svg
+          ><span>Se déconnecter</span>
+        </button>
         <div class="sidebar-profile">
           <span class="avatar user-initials">ME</span>
           <div>
@@ -209,7 +289,7 @@
         ><span id="headerPageName">Vue d’ensemble</span>
       </div>
       <div class="header-tools">
-        <span class="local-badge"><span></span> Données locales</span
+        <span class="local-badge"><span></span> Espace privé · Connecté</span
         ><button
           class="icon-button"
           onclick="App.loadInitialData()"
@@ -582,6 +662,13 @@
           </button>
         </div>
         <div id="accountsFullList" style="margin-top: 14px"></div>
+        <button
+          class="text-link archived-toggle"
+          onclick="Family.loadArchived()"
+        >
+          Consulter les comptes archivés
+        </button>
+        <div id="archivedAccountsList" class="accounts-grid" hidden></div>
       </section>
 
       <!-- ==================== 5. VUE ARGENT DE TIERS ==================== -->
@@ -638,6 +725,140 @@
         <div id="assetsList" class="tx-list" style="margin-top: 14px"></div>
       </section>
 
+      <section id="view-account-detail" class="view-section">
+        <button class="text-link back-link" onclick="App.switchTab('accounts')">
+          ← Tous mes comptes
+        </button>
+        <div class="account-detail-hero">
+          <div>
+            <span class="eyebrow">COMPTE PERSONNEL</span>
+            <h2 id="detailAccountName"></h2>
+            <p id="detailAccountMeta"></p>
+            <button class="account-edit-link" onclick="Family.editAccount()">
+              Modifier le nom / numéro
+            </button>
+          </div>
+          <div>
+            <span>Solde actuel</span><strong id="detailAccountBalance"></strong>
+          </div>
+        </div>
+        <div class="account-stats">
+          <div>
+            <span>Entrées cumulées</span><strong id="detailIncome"></strong>
+          </div>
+          <div>
+            <span>Sorties & frais cumulés</span
+            ><strong id="detailExpense"></strong>
+          </div>
+          <div>
+            <span>Opérations enregistrées</span
+            ><strong id="detailCount"></strong>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Journal de ce compte</h2>
+              <p>Entrées, sorties et virements, avec motifs et descriptions.</p>
+            </div>
+            <button
+              class="btn btn-secondary btn-sm"
+              onclick="Family.accountOperation()"
+            >
+              Nouvelle opération
+            </button>
+          </div>
+          <div class="account-search">
+            <label class="search-field"
+              ><svg class="icon" aria-hidden="true">
+                <use href="/icons/sprite.svg#search"></use></svg
+              ><input
+                id="accountSearch"
+                type="search"
+                aria-label="Rechercher dans les opérations chargées"
+                placeholder="Rechercher dans la page chargée…"
+            /></label>
+          </div>
+          <div id="accountTransactions" class="account-transactions"></div>
+          <div class="account-pagination">
+            <button
+              class="btn btn-secondary btn-sm"
+              id="accountPrev"
+              onclick="Family.accountPage(-1)"
+            >
+              ← Précédent</button
+            ><span id="accountPageLabel"></span
+            ><button
+              class="btn btn-secondary btn-sm"
+              id="accountNext"
+              onclick="Family.accountPage(1)"
+            >
+              Suivant →
+            </button>
+          </div>
+        </div>
+        <button
+          class="text-link archive-account"
+          onclick="Family.archiveAccount()"
+        >
+          Archiver ce compte (solde nul uniquement)
+        </button>
+      </section>
+      <section id="view-admin" class="view-section">
+        <div class="admin-intro">
+          <span class="metric-icon mint"
+            ><svg class="icon" aria-hidden="true">
+              <use href="/icons/sprite.svg#users"></use></svg
+          ></span>
+          <div>
+            <h2>Un espace pour chacun.</h2>
+            <p>
+              Invitez vos proches et gérez les accès. Les comptes et les
+              opérations de chaque membre restent privés.
+            </p>
+          </div>
+          <button
+            class="btn btn-primary"
+            id="inviteButton"
+            onclick="Family.createInvitation()"
+          >
+            Créer une invitation
+          </button>
+        </div>
+        <div class="invitation-result" id="invitationResult" hidden>
+          <strong>Invitation créée · Valable 7 jours · Un seul usage</strong>
+          <p>
+            Transmettez ce code à votre proche via un canal privé. Il ne sera
+            plus affiché après avoir quitté cette page.
+          </p>
+          <div>
+            <code id="invitationCode"></code
+            ><button
+              class="btn btn-secondary btn-sm"
+              onclick="Family.copyInvitation()"
+            >
+              Copier
+            </button>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Membres de la famille</h2>
+              <p>Le statut contrôle immédiatement l’accès à l’application.</p>
+            </div>
+            <button class="text-link" onclick="Family.loadMembers()">
+              Actualiser
+            </button>
+          </div>
+          <div id="membersList"></div>
+          <div class="panel-body">
+            <button class="text-link" onclick="Family.revokeInvitations()">
+              Révoquer toutes les invitations non utilisées
+            </button>
+          </div>
+        </div>
+      </section>
       <!-- ==================== 7. VUE PARAMÈTRES ==================== -->
       <section id="view-settings" class="view-section">
         <div class="chart-card-title">
@@ -664,58 +885,10 @@
               </select>
             </div>
 
-            <div
-              class="form-group"
-              style="
-                padding-top: 12px;
-                border-top: 1px solid var(--border-light);
-                margin-top: 12px;
-              "
-            >
-              <div
-                style="
-                  display: flex;
-                  justify-content: space-between;
-                  align-items: center;
-                "
-              >
-                <div>
-                  <label class="form-label" style="margin-bottom: 2px"
-                    >Code PIN à l'ouverture</label
-                  >
-                  <div style="font-size: 0.74rem; color: var(--text-muted)">
-                    Verrouillage de l’interface sur cet appareil (ne sécurise
-                    pas l’API).
-                  </div>
-                </div>
-                <input
-                  type="checkbox"
-                  id="settingPinToggle"
-                  style="
-                    width: 22px;
-                    height: 22px;
-                    accent-color: var(--gold-primary);
-                  "
-                />
-              </div>
-            </div>
-
-            <div class="form-group">
-              <label class="form-label"
-                >Nouveau Code PIN (laisser vide pour ne pas changer)</label
-              >
-              <input
-                type="password"
-                id="settingNewPin"
-                class="form-input"
-                placeholder="4 à 6 chiffres"
-                maxlength="6"
-                minlength="4"
-                pattern="[0-9]{4,6}"
-                inputmode="numeric"
-              />
-            </div>
-
+            <p class="field-hint">
+              Une seule devise par espace. Elle ne peut plus être changée après
+              la première opération, afin de ne pas mélanger les montants.
+            </p>
             <button
               type="submit"
               class="btn btn-primary"
@@ -726,6 +899,62 @@
           </form>
         </div>
 
+        <div class="panel security-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Connexion & sécurité</h2>
+              <p id="profileEmail"></p>
+            </div>
+            <span class="connected-pill">Session active</span>
+          </div>
+          <div class="panel-body">
+            <form id="passwordForm">
+              <div class="form-group">
+                <label class="form-label" for="currentPassword"
+                  >Mot de passe actuel</label
+                ><input
+                  class="form-input"
+                  id="currentPassword"
+                  type="password"
+                  autocomplete="current-password"
+                  required
+                  maxlength="128"
+                />
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="newPassword"
+                  >Nouveau mot de passe</label
+                ><input
+                  class="form-input"
+                  id="newPassword"
+                  type="password"
+                  autocomplete="new-password"
+                  minlength="12"
+                  maxlength="128"
+                  required
+                /><small
+                  >12 caractères minimum. Les autres sessions seront
+                  déconnectées.</small
+                >
+              </div>
+              <button type="submit" class="btn btn-primary">
+                Changer mon mot de passe
+              </button>
+            </form>
+          </div>
+        </div>
+        <div class="panel security-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Mon activité récente</h2>
+              <p>Les 100 derniers événements de votre espace.</p>
+            </div>
+            <button class="text-link" onclick="Family.loadAudit()">
+              Actualiser
+            </button>
+          </div>
+          <div id="auditList" class="audit-list"></div>
+        </div>
         <div class="loan-card">
           <h3 style="font-size: 0.98rem; font-weight: 750; margin-bottom: 6px">
             Sauvegarde des données
@@ -1570,8 +1799,104 @@
       </div>
     </div>
 
+    <div id="editAccountModal" class="modal-overlay no-print">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 class="modal-title">Modifier le compte</h3>
+          <button class="close-btn close-modal-btn" aria-label="Fermer">
+            ×
+          </button>
+        </div>
+        <form id="editAccountForm">
+          <div class="form-group">
+            <label for="editAccountName" class="form-label">Nom du compte</label
+            ><input
+              class="form-input"
+              id="editAccountName"
+              required
+              maxlength="200"
+            />
+          </div>
+          <div class="form-group">
+            <label for="editAccountNumber" class="form-label"
+              >Numéro de compte / téléphone (facultatif)</label
+            ><input class="form-input" id="editAccountNumber" maxlength="200" />
+          </div>
+          <p class="field-hint">
+            Le solde n’est pas modifiable ici. Chaque mouvement doit être
+            enregistré dans le journal.
+          </p>
+          <button class="btn btn-primary" type="submit">Enregistrer</button>
+        </form>
+      </div>
+    </div>
+    <div id="spendFundModal" class="modal-overlay no-print">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 class="modal-title">Dépense pour un tiers</h3>
+          <button class="close-btn close-modal-btn" aria-label="Fermer">
+            ×
+          </button>
+        </div>
+        <p class="field-hint" id="spendFundInfo"></p>
+        <form id="spendFundForm">
+          <div class="form-group">
+            <label for="spendFundAmount" class="form-label"
+              >Montant dépensé</label
+            ><input
+              class="form-input"
+              id="spendFundAmount"
+              type="number"
+              step="0.01"
+              min="0.01"
+              required
+            />
+          </div>
+          <div class="form-group">
+            <label for="spendFundFee" class="form-label">Frais éventuels</label
+            ><input
+              class="form-input"
+              id="spendFundFee"
+              type="number"
+              step="0.01"
+              min="0"
+              value="0"
+              required
+            />
+          </div>
+          <div class="form-group">
+            <label for="spendFundAccount" class="form-label"
+              >Compte débité</label
+            ><select
+              class="form-select account-select"
+              id="spendFundAccount"
+              required
+            ></select>
+          </div>
+          <div class="form-group">
+            <label for="spendFundDescription" class="form-label"
+              >Motif / description de l’achat</label
+            ><input
+              class="form-input"
+              id="spendFundDescription"
+              required
+              maxlength="1000"
+              placeholder="Ex. : Achat de ciment pour le chantier"
+            />
+          </div>
+          <p class="field-hint">
+            Le montant et les frais seront déduits des fonds de ce tiers, pas
+            comptés comme une dépense personnelle.
+          </p>
+          <button class="btn btn-primary" type="submit">
+            Enregistrer la dépense
+          </button>
+        </form>
+      </div>
+    </div>
     <!-- Scripts -->
     <script src="/js/api.js"></script>
     <script src="/js/app.js"></script>
+    <script src="/js/family.js"></script>
   </body>
 </html>

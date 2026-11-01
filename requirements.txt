@@ -1,0 +1,24 @@
+# Runtime lock: versions exercised by the PostgreSQL integration suite.
+fastapi==0.135.2
+starlette==1.10.0
+uvicorn==0.41.0
+psycopg==3.3.3
+psycopg-binary==3.3.3
+psycopg-pool==3.3.3
+argon2-cffi==25.1.0
+argon2-cffi-bindings==26.1.0
+reportlab==4.4.10
+pillow==13.0.0
+charset-normalizer==3.5.2
+pydantic==2.14.2
+pydantic-core==2.50.2
+annotated-types==0.8.0
+annotated-doc==0.0.5
+typing-extensions==4.16.0
+typing-inspection==0.4.4
+anyio==4.16.0
+idna==3.20
+click==8.5.0
+h11==0.16.0
+cffi==2.1.1
+pycparser==3.12

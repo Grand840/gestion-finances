@@ -1,171 +1,110 @@
-/**
- * Client API REST (Togo - FCFA)
- * Gestion des comptes T-Money, Moov Money, Prêts/Emprunts et Reçus d'acomptes
- */
-
+/** Same-origin API. Sessions live only in HttpOnly cookies, never localStorage. */
 const API = {
-  baseUrl: '',
-
+  csrf: "",
   async request(endpoint, options = {}) {
-    const url = `${this.baseUrl}/api${endpoint}`;
-    const defaultHeaders = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json'
-    };
-
-    try {
-      const response = await fetch(url, {
-        ...options,
-        headers: {
-          ...defaultHeaders,
-          ...(options.headers || {})
-        }
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || errorData.message || `Erreur serveur (${response.status})`);
-      }
-
-      return await response.json();
-    } catch (err) {
-      console.error(`Erreur API ${endpoint}:`, err);
-      throw err;
+    const write = options.method && options.method !== "GET";
+    const response = await fetch("/api" + endpoint, {
+      ...options,
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        ...(write && this.csrf ? { "X-CSRF-Token": this.csrf } : {}),
+        ...(write
+          ? {
+              "Idempotency-Key": crypto.randomUUID
+                ? crypto.randomUUID()
+                : Date.now() + "-" + Math.random(),
+            }
+          : {}),
+        ...options.headers,
+      },
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (response.status === 401 && !endpoint.startsWith("/auth/"))
+        window.dispatchEvent(new Event("session-expired"));
+      throw new Error(data.error || "Service indisponible. Réessayez.");
     }
+    return data;
   },
-
-  async getMetrics() {
-    return this.request('/metrics');
-  },
-
-  async getAccounts() {
-    return this.request('/accounts');
-  },
-
-  async createAccount(data) {
-    return this.request('/accounts', {
-      method: 'POST',
-      body: JSON.stringify(data)
+  post(endpoint, data = {}) {
+    return this.request(endpoint, {
+      method: "POST",
+      body: JSON.stringify(data),
     });
   },
-
-  async deleteAccount(id) {
-    return this.request(`/accounts/${id}`, {
-      method: 'DELETE'
-    });
+  getMetrics() {
+    return this.request("/metrics");
   },
-
-  async getTransactions(limit = 50) {
-    return this.request(`/transactions?limit=${limit}`);
+  getAccounts() {
+    return this.request("/accounts");
   },
-
-  async createTransaction(data) {
-    return this.request('/transactions', {
-      method: 'POST',
-      body: JSON.stringify(data)
-    });
+  createAccount(d) {
+    return this.post("/accounts", d);
   },
-
-  // MES EMPRUNTS
-  async getBorrowedLoans() {
-    return this.request('/loans/borrowed');
+  deleteAccount(id) {
+    return this.request("/accounts/" + id, { method: "DELETE" });
   },
-
-  async createBorrowedLoan(data) {
-    return this.request('/loans/borrowed', {
-      method: 'POST',
-      body: JSON.stringify(data)
-    });
+  getTransactions(limit = 200, offset = 0, account = null) {
+    return this.request(
+      "/transactions?limit=" +
+        limit +
+        "&offset=" +
+        offset +
+        (account ? "&account_id=" + encodeURIComponent(account) : ""),
+    );
   },
-
-  async repayBorrowedLoan(data) {
-    return this.request('/loans/borrowed/repay', {
-      method: 'POST',
-      body: JSON.stringify(data)
-    });
+  createTransaction(d) {
+    return this.post("/transactions", d);
   },
-
-  // MES PRÊTS ACCORDÉS
-  async getGivenLoans() {
-    return this.request('/loans/given');
+  getBorrowedLoans() {
+    return this.request("/loans/borrowed");
   },
-
-  async createGivenLoan(data) {
-    return this.request('/loans/given', {
-      method: 'POST',
-      body: JSON.stringify(data)
-    });
+  createBorrowedLoan(d) {
+    return this.post("/loans/borrowed", d);
   },
-
-  async receiveLoanRepayment(data) {
-    return this.request('/loans/given/receive', {
-      method: 'POST',
-      body: JSON.stringify(data)
-    });
+  repayBorrowedLoan(d) {
+    return this.post("/loans/borrowed/repay", d);
   },
-
-  // REÇUS D'ACOMPTES
-  async getReceipt(id) {
-    return this.request(`/receipt/${id}`);
+  getGivenLoans() {
+    return this.request("/loans/given");
   },
-
-  // ARGENT DE TIERS
-  async getThirdPartyFunds() {
-    return this.request('/third-party');
+  createGivenLoan(d) {
+    return this.post("/loans/given", d);
   },
-
-  async createThirdPartyFund(data) {
-    return this.request('/third-party', {
-      method: 'POST',
-      body: JSON.stringify(data)
-    });
+  receiveLoanRepayment(d) {
+    return this.post("/loans/given/receive", d);
   },
-
-  async refundThirdPartyFund(data) {
-    return this.request('/third-party/refund', {
-      method: 'POST',
-      body: JSON.stringify(data)
-    });
+  getReceipt(id) {
+    return this.request("/receipt/" + id);
   },
-
-  // ACTIFS
-  async getAssets() {
-    return this.request('/assets');
+  getThirdPartyFunds() {
+    return this.request("/third-party");
   },
-
-  async createAsset(data) {
-    return this.request('/assets', {
-      method: 'POST',
-      body: JSON.stringify(data)
-    });
+  createThirdPartyFund(d) {
+    return this.post("/third-party", d);
   },
-
-  async deleteAsset(id) {
-    return this.request(`/assets/${id}`, {
-      method: 'DELETE'
-    });
+  refundThirdPartyFund(d) {
+    return this.post("/third-party/refund", d);
   },
-
-  // PARAMÈTRES
-  async getSettings() {
-    return this.request('/settings');
+  getAssets() {
+    return this.request("/assets");
   },
-
-  async updateSettings(data) {
-    return this.request('/settings', {
-      method: 'POST',
-      body: JSON.stringify(data)
-    });
+  createAsset(d) {
+    return this.post("/assets", d);
   },
-
-  async verifyPin(pin) {
-    return this.request('/verify-pin', {
-      method: 'POST',
-      body: JSON.stringify({ pin })
-    });
+  deleteAsset(id) {
+    return this.request("/assets/" + id, { method: "DELETE" });
   },
-
-  async exportData() {
-    return this.request('/export');
-  }
+  getSettings() {
+    return this.request("/settings");
+  },
+  updateSettings(d) {
+    return this.post("/settings", d);
+  },
+  exportData() {
+    return this.request("/export");
+  },
 };

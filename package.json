@@ -1,10 +1,10 @@
 {
   "name": "sillage-finances",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "description": "Outils de validation de Sillage. Aucune dépendance JavaScript en production.",
   "scripts": {
-    "test": "python3 -m unittest discover -s tests -v",
+    "test": "python3 -m pytest tests/test_family.py -q",
     "test:ui": "node tests/browser-smoke.cjs"
   },
   "devDependencies": {

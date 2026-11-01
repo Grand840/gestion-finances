@@ -1,0 +1,67 @@
+name: sillage
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Exécutez scripts/configure.py}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Exécutez scripts/configure.py}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/db-init.sh:/docker-entrypoint-initdb.d/01-sillage.sh:ro
+    networks: [database]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres -d sillage"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+    security_opt: [no-new-privileges:true]
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgresql://sillage:${APP_DB_PASSWORD}@db:5432/sillage
+      SETUP_TOKEN: ${SETUP_TOKEN:?Exécutez scripts/configure.py}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      SESSION_HOURS: 24
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+    ports: ["${APP_BIND:-0.0.0.0}:${APP_PORT:-8080}:8080"]
+    networks: [database, web]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test:
+        [
+          CMD,
+          python,
+          -c,
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=3)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+  gateway:
+    image: caddy:2-alpine
+    profiles: [https]
+    restart: unless-stopped
+    depends_on: [app]
+    environment:
+      SILLAGE_DOMAIN: ${SILLAGE_DOMAIN:-localhost}
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [web]
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
+networks:
+  database: { internal: true }
+  web:
