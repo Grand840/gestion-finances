@@ -48,6 +48,14 @@ const fs = require("node:fs/promises");
     await page.waitForFunction(
       () => !document.getElementById("authSubmit").disabled,
     );
+    await page.evaluate(() => {
+      window.testNotices = [];
+      const notify = App.notify.bind(App);
+      App.notify = (message, ...args) => {
+        window.testNotices.push(message);
+        return notify(message, ...args);
+      };
+    });
     const screenshots = process.env.SCREENSHOTS === "true";
     if (screenshots) {
       await fs.mkdir(path.join(root, "test-results"), { recursive: true });
@@ -61,13 +69,40 @@ const fs = require("node:fs/promises");
         await page.locator("#" + id).fill(String(value));
     }
     async function submit(form, url) {
+      const invalid = await page.locator("#" + form).evaluate((el) =>
+        [...el.elements]
+          .filter((input) => input.validity && !input.validity.valid)
+          .map((input) => ({
+            id: input.id,
+            message: input.validationMessage,
+          })),
+      );
+      assert.deepEqual(invalid, [], "invalid form " + form);
       const response = page.waitForResponse(
         (r) =>
           r.url().endsWith(url) &&
           ["POST", "PATCH"].includes(r.request().method()),
       );
       await page.locator("#" + form + " [type=submit]").click();
-      const res = await response;
+      let res;
+      try {
+        res = await response;
+      } catch (error) {
+        error.message +=
+          " " +
+          JSON.stringify(
+            await page.locator("#" + form).evaluate((el) => ({
+              saving: el.dataset.saving,
+              active: document.activeElement?.id,
+              modal: el.closest(".modal-overlay")?.className,
+              invalid: [...el.elements]
+                .filter((input) => input.validity && !input.validity.valid)
+                .map((input) => input.id),
+              notices: window.testNotices,
+            })),
+          );
+        throw error;
+      }
       assert(res.ok(), await res.text());
       await page.waitForFunction(
         (id) => !document.querySelector("#" + id + " [type=submit]").disabled,

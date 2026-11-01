@@ -1125,17 +1125,16 @@ const App = {
         ".sidebar, .app-header, .main-content, .app-footer, .bottom-nav",
       )
       .forEach((el) => (el.inert = true));
-    requestAnimationFrame(() => {
-      const content = modal.querySelector(".modal-content");
-      content.scrollTop = 0;
-      content.tabIndex = -1;
-      const target =
-        modalId === "receiptModal"
-          ? content
-          : modal.querySelector("input:not([type=hidden]), select, textarea") ||
-            content;
-      target.focus({ preventScroll: true });
-    });
+    // Focus synchronously: a deferred frame can steal focus during fast input.
+    const content = modal.querySelector(".modal-content");
+    content.scrollTop = 0;
+    content.tabIndex = -1;
+    const target =
+      modalId === "receiptModal"
+        ? content
+        : modal.querySelector("input:not([type=hidden]), select, textarea") ||
+          content;
+    target.focus({ preventScroll: true });
   },
 
   updateQuickAddForm(type) {
