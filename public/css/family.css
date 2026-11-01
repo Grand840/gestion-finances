@@ -17,6 +17,7 @@ body.auth-pending {
   padding: 0;
   background: #fafbf7;
 }
+.auth-pending > .modal-overlay,
 .auth-pending > .sidebar,
 .auth-pending > .app-header,
 .auth-pending > .main-content,

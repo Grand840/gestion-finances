@@ -143,6 +143,9 @@ const fs = require("node:fs/promises");
       await page.locator(".document-signatures img").getAttribute("src"),
       "/icons/stamp.svg",
     );
+    const receiptId = (
+      await page.locator(".document-actions a[download]").getAttribute("href")
+    ).split("/")[3];
     const download = page.waitForEvent("download");
     await page.getByRole("link", { name: "Télécharger le PDF" }).click();
     const file = await download;
@@ -224,8 +227,32 @@ const fs = require("node:fs/promises");
       );
     }
     await page.setViewportSize({ width: 1440, height: 1000 });
+    // A successful private response already in flight must not reappear after logout.
+    await page.evaluate((id) => {
+      window.originalFetch = window.fetch.bind(window);
+      window.fetch = async (...args) => {
+        const response = await window.originalFetch(...args);
+        if (args[0] === "/api/receipt/" + id) {
+          window.receiptStarted = true;
+          await new Promise((resolve) => (window.releaseReceipt = resolve));
+        }
+        return response;
+      };
+      window.pendingReceipt = App.openReceiptModal(id);
+    }, receiptId);
+    await page.waitForFunction(() => window.receiptStarted);
     await page.locator(".logout-button").click();
     await page.waitForFunction(() => !Family.user);
+    await page.evaluate(() => window.releaseReceipt());
+    await page.evaluate(() => window.pendingReceipt);
+    await page.evaluate(() => (window.fetch = window.originalFetch));
+    assert.equal(
+      await page
+        .locator("#receiptModal")
+        .evaluate((el) => el.classList.contains("active")),
+      false,
+    );
+
     assert.equal(await page.locator("#receiptModalContent").textContent(), "");
     await page.locator("#registerTab").click();
     await fill({

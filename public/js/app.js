@@ -1315,7 +1315,7 @@ const App = {
       this.notify("Opération enregistrée.");
       await this.loadInitialData();
 
-      // Afficher le reçu officiel immédiatement
+      // Afficher immédiatement le reçu applicatif
       if (res.receipt && res.receipt.repayment_id) {
         await this.openReceiptModal(res.receipt.repayment_id);
       }

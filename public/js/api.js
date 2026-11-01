@@ -2,6 +2,7 @@
 const API = {
   csrf: "",
   async request(endpoint, options = {}) {
+    const epoch = typeof Family === "undefined" ? null : Family.epoch;
     const write = options.method && options.method !== "GET";
     const response = await fetch("/api" + endpoint, {
       ...options,
@@ -22,6 +23,12 @@ const API = {
       },
     });
     const data = await response.json().catch(() => ({}));
+    if (epoch !== null && epoch !== Family.epoch) {
+      throw new DOMException(
+        "Session modifiée : ancienne réponse ignorée.",
+        "AbortError",
+      );
+    }
     if (!response.ok) {
       if (response.status === 401 && !endpoint.startsWith("/auth/"))
         window.dispatchEvent(new Event("session-expired"));
