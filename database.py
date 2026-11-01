@@ -1,553 +1,594 @@
-"""
-Base de données SQLite et logique financière pour le Togo (FCFA).
-Prise en compte native de T-Money, Moov Money, Espèces (Poche) et Banques (Ecobank, etc.).
-Ségrégation stricte des fonds et génération de reçus d'acomptes détaillés.
-"""
+"""PostgreSQL storage. Every financial operation runs atomically under its owner's lock."""
 
-import sqlite3
+import hashlib
+import json
 import os
-import uuid
-from datetime import datetime
+from contextlib import contextmanager
+from datetime import date
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+from uuid import uuid4, UUID
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "finances.db")
+from fastapi import HTTPException
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
+from psycopg_pool import ConnectionPool
 
-def get_connection():
-    conn = sqlite3.connect(DB_PATH, timeout=30.0, isolation_level=None)
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.row_factory = sqlite3.Row
-    return conn
+pool = None
+
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH, timeout=30.0, isolation_level=None)
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA foreign_keys = ON")
-    c = conn.cursor()
-
-    # 1. Comptes de liquidités (T-Money, Moov Money, Poche, Banques)
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS accounts (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        type TEXT NOT NULL, -- 'momo', 'cash', 'bank'
-        balance REAL NOT NULL DEFAULT 0,
-        currency TEXT NOT NULL DEFAULT 'FCFA',
-        account_number TEXT DEFAULT '',
-        color TEXT DEFAULT '#8b7355',
-        is_active INTEGER DEFAULT 1,
-        created_at TEXT NOT NULL
+    global pool
+    url = os.environ.get("DATABASE_URL", "")
+    if not url.startswith(("postgresql://", "postgres://")):
+        raise RuntimeError("DATABASE_URL doit désigner une base PostgreSQL.")
+    pool = ConnectionPool(
+        url, min_size=1, max_size=10, kwargs={"row_factory": dict_row}, open=True
     )
-    """)
+    pool.wait(timeout=30)
+    with connect() as db:
+        db.execute("SELECT pg_advisory_xact_lock(837401)")
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TIMESTAMPTZ DEFAULT now())"
+        )
+        for path in sorted((Path(__file__).parent / "migrations").glob("*.sql")):
+            content = path.read_text()
+            checksum = hashlib.sha256(content.encode()).hexdigest()
+            previous = one(
+                db, "SELECT * FROM schema_migrations WHERE version=%s", [path.name]
+            )
+            if previous:
+                if previous["checksum"] != checksum:
+                    raise RuntimeError(
+                        "Migration déjà appliquée modifiée : " + path.name
+                    )
+            else:
+                db.execute(content, prepare=False)
+                db.execute(
+                    "INSERT INTO schema_migrations(version,checksum) VALUES (%s,%s)",
+                    [path.name, checksum],
+                )
 
-    # 2. Compte Emprunts Reçus (Ce que j'emprunte à autrui ou banque)
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS loans_borrowed (
-        id TEXT PRIMARY KEY,
-        lender_name TEXT NOT NULL,
-        title TEXT NOT NULL,
-        initial_amount REAL NOT NULL,
-        current_balance REAL NOT NULL,
-        disbursed_to_account_id TEXT,
-        status TEXT NOT NULL DEFAULT 'active',
-        due_date TEXT DEFAULT '',
-        notes TEXT DEFAULT '',
-        created_at TEXT NOT NULL,
-        FOREIGN KEY (disbursed_to_account_id) REFERENCES accounts (id) ON DELETE SET NULL
+
+@contextmanager
+def connect():
+    if pool is None:
+        raise RuntimeError("Base non initialisée")
+    with pool.connection() as db:
+        with db.transaction():
+            yield db
+
+
+def one(db, sql, args=()):
+    return db.execute(sql, args).fetchone()
+
+
+def rows(db, sql, args=()):
+    return db.execute(sql, args).fetchall()
+
+
+def identifier():
+    return str(uuid4())
+
+
+def money(value, zero=False):
+    try:
+        amount = Decimal(str(value))
+        if (
+            not amount.is_finite()
+            or amount < 0
+            or (amount == 0 and not zero)
+            or amount >= Decimal("1000000000000")
+            or amount != amount.quantize(Decimal(".01"))
+        ):
+            raise ValueError()
+        return amount.quantize(Decimal(".01"))
+    except (ValueError, InvalidOperation, TypeError):
+        raise HTTPException(422, "Montant invalide : positif, au plus deux décimales.")
+
+
+def text(value, limit=200, required=True):
+    if (
+        not isinstance(value, str)
+        or len(value.strip()) > limit
+        or (required and not value.strip())
+    ):
+        raise HTTPException(422, "Texte manquant ou trop long.")
+    return value.strip()
+
+
+def day(value=None):
+    try:
+        return (
+            date.today() if value is None or value == "" else date.fromisoformat(value)
+        )
+    except (ValueError, TypeError):
+        raise HTTPException(422, "Date invalide.")
+
+
+def owned(db, table, uid, resource, active=False):
+    try:
+        if not isinstance(resource, str) or str(UUID(resource)) != resource:
+            raise ValueError()
+    except (ValueError, AttributeError):
+        raise HTTPException(404, "Élément introuvable dans votre espace.")
+    if table not in ("accounts", "loans", "funds", "assets", "receipts"):
+        raise ValueError("Unknown resource")
+    result = one(
+        db,
+        f"SELECT * FROM {table} WHERE id=%s AND user_id=%s"
+        + (" AND is_active" if active else ""),
+        [resource, uid],
     )
-    """)
+    if not result:
+        raise HTTPException(404, "Élément introuvable dans votre espace.")
+    return result
 
-    # 3. Compte Prêts Accordés (Ce que je prête à un tiers)
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS loans_given (
-        id TEXT PRIMARY KEY,
-        borrower_name TEXT NOT NULL,
-        title TEXT NOT NULL,
-        initial_amount REAL NOT NULL,
-        current_balance REAL NOT NULL,
-        funded_from_account_id TEXT,
-        status TEXT NOT NULL DEFAULT 'active',
-        due_date TEXT DEFAULT '',
-        notes TEXT DEFAULT '',
-        created_at TEXT NOT NULL,
-        FOREIGN KEY (funded_from_account_id) REFERENCES accounts (id) ON DELETE SET NULL
+
+def audit(db, uid, action, resource=None):
+    db.execute(
+        "INSERT INTO audit_events(user_id,action,resource_id) VALUES (%s,%s,%s)",
+        [uid, action, resource],
     )
-    """)
 
-    # 4. Historique des remboursements avec suivi des acomptes et reçu
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS loan_repayments (
-        id TEXT PRIMARY KEY,
-        receipt_no TEXT UNIQUE,
-        loan_type TEXT NOT NULL, -- 'borrowed' ou 'given'
-        loan_id TEXT NOT NULL,
-        account_id TEXT NOT NULL,
-        amount REAL NOT NULL,
-        installment_number INTEGER NOT NULL DEFAULT 1,
-        remaining_balance_after REAL NOT NULL DEFAULT 0,
-        date TEXT NOT NULL,
-        notes TEXT DEFAULT '',
-        created_at TEXT NOT NULL,
-        FOREIGN KEY (account_id) REFERENCES accounts (id)
+
+def create_defaults(db, user):
+    for name, kind in [
+        ("Espèces", "cash"),
+        ("T-Money", "momo"),
+        ("Moov Money", "momo"),
+        ("Compte bancaire", "bank"),
+    ]:
+        db.execute(
+            "INSERT INTO accounts(id,user_id,name,type,currency) VALUES (%s,%s,%s,%s,%s)",
+            [identifier(), user["id"], name, kind, user["currency"]],
+        )
+
+
+def transaction(
+    db,
+    uid,
+    account,
+    kind,
+    amount,
+    category,
+    description="",
+    fee=Decimal(0),
+    dest=None,
+    loan=None,
+    fund=None,
+    when=None,
+):
+    tid = identifier()
+    db.execute(
+        """INSERT INTO transactions(id,user_id,account_id,type,amount,category,description,fee,to_account_id,related_loan_id,third_party_fund_id,date)
+                  VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+        [
+            tid,
+            uid,
+            account,
+            kind,
+            amount,
+            category,
+            description,
+            fee,
+            dest,
+            loan,
+            fund,
+            when or date.today(),
+        ],
     )
-    """)
+    return tid
 
-    # 5. Argent Confié par des Tiers (Mandats / Séquestres)
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS third_party_funds (
-        id TEXT PRIMARY KEY,
-        person_name TEXT NOT NULL,
-        phone TEXT DEFAULT '',
-        reason TEXT NOT NULL,
-        initial_amount REAL NOT NULL,
-        account_id TEXT NOT NULL,
-        spent_amount REAL DEFAULT 0,
-        returned_amount REAL DEFAULT 0,
-        status TEXT DEFAULT 'active',
-        date_received TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY (account_id) REFERENCES accounts (id)
+
+def debit(db, uid, aid, amount, personal=True):
+    acc = owned(db, "accounts", uid, aid, True)
+    if acc["balance"] < amount:
+        raise HTTPException(422, "Solde insuffisant sur ce compte.")
+    if personal:
+        liquid = one(
+            db,
+            "SELECT COALESCE(sum(balance),0) AS n FROM accounts WHERE user_id=%s AND is_active",
+            [uid],
+        )["n"]
+        held = one(
+            db,
+            "SELECT COALESCE(sum(initial_amount-spent_amount-returned_amount),0) AS n FROM funds WHERE user_id=%s",
+            [uid],
+        )["n"]
+        if liquid - amount < held:
+            raise HTTPException(
+                422, "Cette opération utiliserait des fonds confiés par un tiers."
+            )
+    db.execute(
+        "UPDATE accounts SET balance=balance-%s WHERE id=%s AND user_id=%s",
+        [amount, aid, uid],
     )
-    """)
+    return acc
 
-    # 6. Transactions Financières
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS transactions (
-        id TEXT PRIMARY KEY,
-        account_id TEXT NOT NULL,
-        type TEXT NOT NULL,
-        amount REAL NOT NULL,
-        category TEXT NOT NULL,
-        description TEXT DEFAULT '',
-        date TEXT NOT NULL,
-        fee REAL DEFAULT 0,
-        to_account_id TEXT,
-        related_loan_id TEXT,
-        third_party_fund_id TEXT,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY (account_id) REFERENCES accounts (id) ON DELETE CASCADE
+
+def credit(db, uid, aid, amount):
+    acc = owned(db, "accounts", uid, aid, True)
+    db.execute(
+        "UPDATE accounts SET balance=balance+%s WHERE id=%s AND user_id=%s",
+        [amount, aid, uid],
     )
-    """)
+    return acc
 
-    # 7. Actifs & Patrimoine
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS assets (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        category TEXT NOT NULL,
-        purchase_value REAL NOT NULL,
-        current_value REAL NOT NULL,
-        purchase_date TEXT DEFAULT '',
-        notes TEXT DEFAULT '',
-        created_at TEXT NOT NULL
+
+def list_transactions(db, uid, limit=200, offset=0, account=None):
+    args = [uid]
+    clause = ""
+    if account:
+        owned(db, "accounts", uid, account)
+        clause = " AND (t.account_id=%s OR t.to_account_id=%s)"
+        args += [account, account]
+    return rows(
+        db,
+        """SELECT t.*, a.name AS account_name,a.type AS account_type,d.name AS to_account_name
+                      FROM transactions t JOIN accounts a ON a.id=t.account_id LEFT JOIN accounts d ON d.id=t.to_account_id
+                      WHERE t.user_id=%s"""
+        + clause
+        + " ORDER BY t.date DESC,t.created_at DESC,t.id DESC LIMIT %s OFFSET %s",
+        args + [limit, offset],
     )
-    """)
 
-    # 8. Paramètres
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS settings (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
+
+def list_loans(db, uid, kind):
+    loans = rows(
+        db,
+        "SELECT * FROM loans WHERE user_id=%s AND kind=%s ORDER BY status,created_at DESC",
+        [uid, kind],
     )
-    """)
-
-    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('main_currency', 'FCFA')")
-    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('pin_enabled', '0')")
-    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('pin_code', '1234')")
-    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('user_name', 'Moi')")
-
-    # Initialisation des comptes togolais par défaut (T-Money, Moov Money, Poche, Ecobank)
-    c.execute("SELECT COUNT(*) FROM accounts")
-    if c.fetchone()[0] == 0:
-        now = datetime.now().isoformat()
-        togo_default_accounts = [
-            (str(uuid.uuid4()), "T-Money (Togocom)", "momo", 0.0, "FCFA", "", "#e60000", 1, now),
-            (str(uuid.uuid4()), "Moov Money Togo", "momo", 0.0, "FCFA", "", "#005baa", 1, now),
-            (str(uuid.uuid4()), "Dans ma poche (Cash)", "cash", 0.0, "FCFA", "", "#276749", 1, now),
-            (str(uuid.uuid4()), "Ecobank Togo", "bank", 0.0, "FCFA", "", "#004b87", 1, now),
+    for loan in loans:
+        loan["lender_name" if kind == "borrowed" else "borrower_name"] = loan[
+            "contact_name"
         ]
-        c.executemany("""
-        INSERT INTO accounts (id, name, type, balance, currency, account_number, color, is_active, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, togo_default_accounts)
-
-    conn.close()
-
-# ==================== CALCUL DES MÉTRIQUES CLÉS & DONNÉES DE GRAPHES ====================
-def get_dashboard_metrics():
-    conn = get_connection()
-    c = conn.cursor()
-
-    # 1. Total liquidités en caisse
-    c.execute("SELECT COALESCE(SUM(balance), 0) FROM accounts WHERE is_active = 1")
-    total_cash_in_hand = c.fetchone()[0]
-
-    # 2. Argent des tiers confié (séquestre)
-    c.execute("""
-    SELECT COALESCE(SUM(initial_amount - spent_amount - returned_amount), 0)
-    FROM third_party_funds
-    WHERE status = 'active'
-    """)
-    third_party_held = c.fetchone()[0]
-
-    # 3. Encours Emprunts que je dois
-    c.execute("SELECT COALESCE(SUM(current_balance), 0) FROM loans_borrowed WHERE status = 'active'")
-    total_borrowed_due = c.fetchone()[0]
-
-    # 4. Encours Prêts que j'ai accordés (qu'on me doit)
-    c.execute("SELECT COALESCE(SUM(current_balance), 0) FROM loans_given WHERE status = 'active'")
-    total_loans_given_due = c.fetchone()[0]
-
-    # 5. Actifs matériels
-    c.execute("SELECT COALESCE(SUM(current_value), 0) FROM assets")
-    total_assets = c.fetchone()[0]
-
-    # 6. Fonds propres liquides : les emprunts ne sont pas du capital personnel.
-    # Conserver un montant négatif pour rendre visible un déficit de couverture.
-    real_available_cash = total_cash_in_hand - third_party_held - total_borrowed_due
-
-    # 7. FORTUNE / PATRIMOINE NET
-    net_worth = (total_cash_in_hand - third_party_held - total_borrowed_due) + total_loans_given_due + total_assets
-
-    # Données pour diagramme de répartition des liquidités par compte
-    c.execute("SELECT name, balance, color, type FROM accounts WHERE is_active = 1")
-    accounts_distribution = [dict(row) for row in c.fetchall()]
-
-    # Données pour diagramme des dépenses par catégorie
-    c.execute("""
-    SELECT category, COALESCE(SUM(amount + fee), 0) as total
-    FROM transactions
-    WHERE type = 'expense'
-      AND related_loan_id IS NULL
-      AND third_party_fund_id IS NULL
-    GROUP BY category
-    ORDER BY total DESC
-    LIMIT 6
-    """)
-    categories_distribution = [dict(row) for row in c.fetchall()]
-
-    # Paramètres
-    c.execute("SELECT key, value FROM settings")
-    settings = dict(c.fetchall())
-
-    conn.close()
-
-    return {
-        "total_cash_in_hand": total_cash_in_hand,
-        "real_available_cash": real_available_cash,
-        "third_party_held": third_party_held,
-        "total_borrowed_due": total_borrowed_due,
-        "total_loans_given_due": total_loans_given_due,
-        "total_assets": total_assets,
-        "net_worth": net_worth,
-        "accounts_distribution": accounts_distribution,
-        "categories_distribution": categories_distribution,
-        "currency": settings.get("main_currency", "FCFA"),
-        "user_name": settings.get("user_name", "Moi"),
-        "pin_enabled": settings.get("pin_enabled", "0") == "1"
-    }
-
-# ==================== TRANSACTIONS ====================
-def record_transaction(account_id, trans_type, amount, category, description="", date=None, fee=0.0, to_account_id=None, third_party_fund_id=None):
-    conn = get_connection()
-    c = conn.cursor()
-    trans_id = str(uuid.uuid4())
-    now = datetime.now().isoformat()
-    if not date:
-        date = datetime.now().strftime("%Y-%m-%d")
-
-    amount = float(amount)
-    fee = float(fee or 0.0)
-
-    if trans_type == 'income':
-        c.execute("UPDATE accounts SET balance = balance + ? WHERE id = ?", (amount, account_id))
-
-    elif trans_type == 'expense':
-        total_deduction = amount + fee
-        c.execute("UPDATE accounts SET balance = balance - ? WHERE id = ?", (total_deduction, account_id))
-
-        if third_party_fund_id:
-            c.execute("UPDATE third_party_funds SET spent_amount = spent_amount + ? WHERE id = ?", (amount, third_party_fund_id))
-            c.execute("SELECT initial_amount, spent_amount, returned_amount FROM third_party_funds WHERE id = ?", (third_party_fund_id,))
-            tpf = c.fetchone()
-            if tpf and (tpf['spent_amount'] + tpf['returned_amount'] >= tpf['initial_amount']):
-                c.execute("UPDATE third_party_funds SET status = 'settled' WHERE id = ?", (third_party_fund_id,))
-
-    elif trans_type == 'transfer':
-        if not to_account_id:
-            conn.close()
-            raise ValueError("Compte destination requis pour un virement.")
-        c.execute("UPDATE accounts SET balance = balance - ? WHERE id = ?", (amount + fee, account_id))
-        c.execute("UPDATE accounts SET balance = balance + ? WHERE id = ?", (amount, to_account_id))
-
-    c.execute("""
-    INSERT INTO transactions (id, account_id, type, amount, category, description, date, fee, to_account_id, third_party_fund_id, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (trans_id, account_id, trans_type, amount, category, description, date, fee, to_account_id, third_party_fund_id, now))
-
-    conn.close()
-    return trans_id
-
-# ==================== GESTION DES EMPRUNTS REÇUS (DETTES) ====================
-def create_borrowed_loan(lender_name, title, amount, account_id=None, due_date="", notes=""):
-    conn = get_connection()
-    c = conn.cursor()
-    loan_id = str(uuid.uuid4())
-    now = datetime.now().isoformat()
-    today = datetime.now().strftime("%Y-%m-%d")
-    amount = float(amount)
-
-    c.execute("""
-    INSERT INTO loans_borrowed (id, lender_name, title, initial_amount, current_balance, disbursed_to_account_id, status, due_date, notes, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
-    """, (loan_id, lender_name, title, amount, amount, account_id, due_date, notes, now))
-
-    if account_id:
-        c.execute("UPDATE accounts SET balance = balance + ? WHERE id = ?", (amount, account_id))
-        trans_id = str(uuid.uuid4())
-        c.execute("""
-        INSERT INTO transactions (id, account_id, type, amount, category, description, date, fee, related_loan_id, created_at)
-        VALUES (?, ?, 'income', ?, 'Fonds Empruntés', ?, ?, 0, ?, ?)
-        """, (trans_id, account_id, amount, f"Encaissement emprunt : {title} ({lender_name})", today, loan_id, now))
-
-    conn.close()
-    return loan_id
-
-def repay_borrowed_loan(loan_id, account_id, amount, notes=""):
-    conn = get_connection()
-    c = conn.cursor()
-    amount = float(amount)
-    now = datetime.now().isoformat()
-    today = datetime.now().strftime("%Y-%m-%d")
-
-    c.execute("SELECT lender_name, title, initial_amount, current_balance FROM loans_borrowed WHERE id = ?", (loan_id,))
-    loan = c.fetchone()
-    if not loan:
-        conn.close()
-        raise ValueError("Emprunt introuvable.")
-
-    new_balance = max(0.0, loan['current_balance'] - amount)
-    status = 'settled' if new_balance == 0 else 'active'
-
-    # Calcul du numéro d'acompte
-    c.execute("SELECT COUNT(*) FROM loan_repayments WHERE loan_id = ? AND loan_type = 'borrowed'", (loan_id,))
-    prev_count = c.fetchone()[0]
-    installment_number = prev_count + 1
-
-    # N° de reçu unique
-    receipt_no = f"REC-EMP-{datetime.now().strftime('%y%m%d')}-{installment_number:02d}-{str(uuid.uuid4())[:4].upper()}"
-
-    # Débiter le compte choisi (T-Money, Moov, Espèces, Banque)
-    c.execute("UPDATE accounts SET balance = balance - ? WHERE id = ?", (amount, account_id))
-
-    # Mettre à jour l'emprunt
-    c.execute("UPDATE loans_borrowed SET current_balance = ?, status = ? WHERE id = ?", (new_balance, status, loan_id))
-
-    # Enregistrer le remboursement avec son n° d'acompte et reste dû
-    rep_id = str(uuid.uuid4())
-    c.execute("""
-    INSERT INTO loan_repayments (id, receipt_no, loan_type, loan_id, account_id, amount, installment_number, remaining_balance_after, date, notes, created_at)
-    VALUES (?, ?, 'borrowed', ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (rep_id, receipt_no, loan_id, account_id, amount, installment_number, new_balance, today, notes, now))
-
-    # Transaction
-    trans_id = str(uuid.uuid4())
-    c.execute("""
-    INSERT INTO transactions (id, account_id, type, amount, category, description, date, fee, related_loan_id, created_at)
-    VALUES (?, ?, 'expense', ?, 'Remboursement Emprunt', ?, ?, 0, ?, ?)
-    """, (trans_id, account_id, amount, f"{installment_number}e Acompte : {loan['title']} à {loan['lender_name']}", today, loan_id, now))
-
-    conn.close()
-    return {
-        "repayment_id": rep_id,
-        "receipt_no": receipt_no,
-        "installment_number": installment_number,
-        "amount_paid": amount,
-        "initial_amount": loan['initial_amount'],
-        "remaining_balance": new_balance,
-        "beneficiary": loan['lender_name'],
-        "title": loan['title'],
-        "date": today,
-        "is_settled": status == 'settled'
-    }
-
-# ==================== GESTION DES PRÊTS ACCORDÉS (CRÉANCES) ====================
-def create_given_loan(borrower_name, title, amount, from_account_id, due_date="", notes=""):
-    conn = get_connection()
-    c = conn.cursor()
-    loan_id = str(uuid.uuid4())
-    now = datetime.now().isoformat()
-    today = datetime.now().strftime("%Y-%m-%d")
-    amount = float(amount)
-
-    c.execute("UPDATE accounts SET balance = balance - ? WHERE id = ?", (amount, from_account_id))
-
-    c.execute("""
-    INSERT INTO loans_given (id, borrower_name, title, initial_amount, current_balance, funded_from_account_id, status, due_date, notes, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
-    """, (loan_id, borrower_name, title, amount, amount, from_account_id, due_date, notes, now))
-
-    trans_id = str(uuid.uuid4())
-    c.execute("""
-    INSERT INTO transactions (id, account_id, type, amount, category, description, date, fee, related_loan_id, created_at)
-    VALUES (?, ?, 'expense', ?, 'Prêt accordé', ?, ?, 0, ?, ?)
-    """, (trans_id, from_account_id, amount, f"Prêt accordé à {borrower_name} : {title}", today, loan_id, now))
-
-    conn.close()
-    return loan_id
-
-def receive_loan_repayment(loan_id, to_account_id, amount, notes=""):
-    conn = get_connection()
-    c = conn.cursor()
-    amount = float(amount)
-    now = datetime.now().isoformat()
-    today = datetime.now().strftime("%Y-%m-%d")
-
-    c.execute("SELECT borrower_name, title, initial_amount, current_balance FROM loans_given WHERE id = ?", (loan_id,))
-    loan = c.fetchone()
-    if not loan:
-        conn.close()
-        raise ValueError("Prêt introuvable.")
-
-    new_balance = max(0.0, loan['current_balance'] - amount)
-    status = 'settled' if new_balance == 0 else 'active'
-
-    # Calcul du numéro d'acompte reçu
-    c.execute("SELECT COUNT(*) FROM loan_repayments WHERE loan_id = ? AND loan_type = 'given'", (loan_id,))
-    prev_count = c.fetchone()[0]
-    installment_number = prev_count + 1
-
-    # N° de quittance unique
-    receipt_no = f"REC-PRT-{datetime.now().strftime('%y%m%d')}-{installment_number:02d}-{str(uuid.uuid4())[:4].upper()}"
-
-    # Créditer le compte choisi
-    c.execute("UPDATE accounts SET balance = balance + ? WHERE id = ?", (amount, to_account_id))
-
-    # Diminuer l'encours du prêt accordé
-    c.execute("UPDATE loans_given SET current_balance = ?, status = ? WHERE id = ?", (new_balance, status, loan_id))
-
-    # Enregistrer le versement reçu
-    rep_id = str(uuid.uuid4())
-    c.execute("""
-    INSERT INTO loan_repayments (id, receipt_no, loan_type, loan_id, account_id, amount, installment_number, remaining_balance_after, date, notes, created_at)
-    VALUES (?, ?, 'given', ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (rep_id, receipt_no, loan_id, to_account_id, amount, installment_number, new_balance, today, notes, now))
-
-    # Transaction
-    trans_id = str(uuid.uuid4())
-    c.execute("""
-    INSERT INTO transactions (id, account_id, type, amount, category, description, date, fee, related_loan_id, created_at)
-    VALUES (?, ?, 'income', ?, 'Encaissement Prêt', ?, ?, 0, ?, ?)
-    """, (trans_id, to_account_id, amount, f"{installment_number}e Acompte reçu de {loan['borrower_name']} pour {loan['title']}", today, loan_id, now))
-
-    conn.close()
-    return {
-        "collection_id": rep_id,
-        "receipt_no": receipt_no,
-        "installment_number": installment_number,
-        "amount_paid": amount,
-        "initial_amount": loan['initial_amount'],
-        "remaining_balance": new_balance,
-        "debtor": loan['borrower_name'],
-        "title": loan['title'],
-        "date": today,
-        "is_settled": status == 'settled'
-    }
-
-# ==================== DÉTAILS D'UN REÇU POUR IMPRESSION ====================
-def get_receipt_data(repayment_id):
-    conn = get_connection()
-    c = conn.cursor()
-
-    c.execute("""
-    SELECT r.*, a.name as account_name, a.type as account_type,
-           CASE
-             WHEN r.loan_type = 'borrowed' THEN (SELECT lender_name FROM loans_borrowed lb WHERE lb.id = r.loan_id)
-             ELSE (SELECT borrower_name FROM loans_given lg WHERE lg.id = r.loan_id)
-           END as contact_name,
-           CASE
-             WHEN r.loan_type = 'borrowed' THEN (SELECT title FROM loans_borrowed lb WHERE lb.id = r.loan_id)
-             ELSE (SELECT title FROM loans_given lg WHERE lg.id = r.loan_id)
-           END as loan_title,
-           CASE
-             WHEN r.loan_type = 'borrowed' THEN (SELECT initial_amount FROM loans_borrowed lb WHERE lb.id = r.loan_id)
-             ELSE (SELECT initial_amount FROM loans_given lg WHERE lg.id = r.loan_id)
-           END as initial_amount
-    FROM loan_repayments r
-    JOIN accounts a ON r.account_id = a.id
-    WHERE r.id = ?
-    """, (repayment_id,))
-
-    row = c.fetchone()
-    conn.close()
-    return dict(row) if row else None
-
-# ==================== ARGENT DE TIERS ====================
-def add_third_party_fund(person_name, phone, reason, amount, account_id, date_received=None):
-    conn = get_connection()
-    c = conn.cursor()
-    fund_id = str(uuid.uuid4())
-    now = datetime.now().isoformat()
-    if not date_received:
-        date_received = datetime.now().strftime("%Y-%m-%d")
-
-    amount = float(amount)
-    c.execute("UPDATE accounts SET balance = balance + ? WHERE id = ?", (amount, account_id))
-
-    trans_id = str(uuid.uuid4())
-    c.execute("""
-    INSERT INTO transactions (id, account_id, type, amount, category, description, date, fee, third_party_fund_id, created_at)
-    VALUES (?, ?, 'income', ?, 'Dépôt Tiers', ?, ?, 0, ?, ?)
-    """, (trans_id, account_id, amount, f"Argent confié par {person_name} : {reason}", date_received, fund_id, now))
-
-    c.execute("""
-    INSERT INTO third_party_funds (id, person_name, phone, reason, initial_amount, account_id, spent_amount, returned_amount, status, date_received, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, 0, 0, 'active', ?, ?)
-    """, (fund_id, person_name, phone, reason, amount, account_id, date_received, now))
-
-    conn.close()
-    return fund_id
-
-def refund_third_party_fund(fund_id, account_id, amount, notes=""):
-    conn = get_connection()
-    c = conn.cursor()
-    amount = float(amount)
-    now = datetime.now().isoformat()
-    today = datetime.now().strftime("%Y-%m-%d")
-
-    c.execute("UPDATE accounts SET balance = balance - ? WHERE id = ?", (amount, account_id))
-    c.execute("UPDATE third_party_funds SET returned_amount = returned_amount + ? WHERE id = ?", (amount, fund_id))
-
-    c.execute("SELECT initial_amount, spent_amount, returned_amount, person_name FROM third_party_funds WHERE id = ?", (fund_id,))
-    row = c.fetchone()
-    if row and (row['spent_amount'] + row['returned_amount'] >= row['initial_amount']):
-        c.execute("UPDATE third_party_funds SET status = 'settled' WHERE id = ?", (fund_id,))
-
-    trans_id = str(uuid.uuid4())
-    c.execute("""
-    INSERT INTO transactions (id, account_id, type, amount, category, description, date, fee, third_party_fund_id, created_at)
-    VALUES (?, ?, 'expense', ?, 'Restitution Tiers', ?, ?, 0, ?, ?)
-    """, (trans_id, account_id, amount, f"Restitution à {row['person_name']}: {notes}", today, fund_id, now))
-
-    conn.close()
-
-# ==================== ACTIFS ====================
-def add_asset(name, category, purchase_value, current_value, purchase_date="", notes=""):
-    conn = get_connection()
-    c = conn.cursor()
-    asset_id = str(uuid.uuid4())
-    now = datetime.now().isoformat()
-    if not purchase_date:
-        purchase_date = datetime.now().strftime("%Y-%m-%d")
-
-    c.execute("""
-    INSERT INTO assets (id, name, category, purchase_value, current_value, purchase_date, notes, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (asset_id, name, category, float(purchase_value), float(current_value), purchase_date, notes, now))
-
-    conn.close()
-    return asset_id
-
-def delete_asset(asset_id):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
-    conn.close()
+        loan["repayments"] = [
+            r["snapshot"]
+            for r in rows(
+                db,
+                "SELECT snapshot FROM receipts WHERE user_id=%s AND loan_id=%s ORDER BY installment_number",
+                [uid, loan["id"]],
+            )
+        ]
+    return loans
+
+
+def metrics(db, user):
+    uid = user["id"]
+    liquid = one(
+        db,
+        "SELECT COALESCE(sum(balance),0) n FROM accounts WHERE user_id=%s AND is_active",
+        [uid],
+    )["n"]
+    held = one(
+        db,
+        "SELECT COALESCE(sum(initial_amount-spent_amount-returned_amount),0) n FROM funds WHERE user_id=%s",
+        [uid],
+    )["n"]
+    borrowed = one(
+        db,
+        "SELECT COALESCE(sum(current_balance),0) n FROM loans WHERE user_id=%s AND kind='borrowed'",
+        [uid],
+    )["n"]
+    given = one(
+        db,
+        "SELECT COALESCE(sum(current_balance),0) n FROM loans WHERE user_id=%s AND kind='given'",
+        [uid],
+    )["n"]
+    assets = one(
+        db,
+        "SELECT COALESCE(sum(current_value),0) n FROM assets WHERE user_id=%s",
+        [uid],
+    )["n"]
+    return dict(
+        total_cash_in_hand=liquid,
+        third_party_held=held,
+        total_borrowed_due=borrowed,
+        total_loans_given_due=given,
+        total_assets=assets,
+        real_available_cash=liquid - held - borrowed,
+        net_worth=liquid - held - borrowed + given + assets,
+        currency=user["currency"],
+        user_name=user["name"],
+        pin_enabled=False,
+        accounts_distribution=rows(
+            db,
+            "SELECT name,balance,type,color FROM accounts WHERE user_id=%s AND is_active ORDER BY name",
+            [uid],
+        ),
+        categories_distribution=rows(
+            db,
+            "SELECT category,sum(amount+fee) total FROM transactions WHERE user_id=%s AND type='expense' AND related_loan_id IS NULL AND third_party_fund_id IS NULL GROUP BY category ORDER BY total DESC LIMIT 5",
+            [uid],
+        ),
+    )
+
+
+def create_account(db, user, data):
+    name, kind = text(data.get("name")), data.get("type")
+    if (
+        kind not in ("cash", "momo", "bank")
+        or data.get("currency", user["currency"]) != user["currency"]
+    ):
+        raise HTTPException(
+            422, "Type de compte ou devise invalide. Une seule devise par espace."
+        )
+    amount, aid = money(data.get("balance", 0), True), identifier()
+    db.execute(
+        "INSERT INTO accounts(id,user_id,name,type,currency,balance,account_number) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+        [
+            aid,
+            user["id"],
+            name,
+            kind,
+            user["currency"],
+            amount,
+            text(data.get("account_number", ""), required=False),
+        ],
+    )
+    if amount:
+        transaction(
+            db,
+            user["id"],
+            aid,
+            "income",
+            amount,
+            "Solde initial",
+            "Ouverture du compte",
+        )
+    return dict(success=True, id=aid)
+
+
+def create_transaction(db, user, data):
+    uid = user["id"]
+    kind = data.get("type")
+    if kind not in ("income", "expense", "transfer"):
+        raise HTTPException(422, "Type d’opération invalide.")
+    amount, fee = money(data.get("amount")), money(data.get("fee", 0), True)
+    aid, dest = data.get("account_id"), data.get("to_account_id")
+    if kind == "income" and fee:
+        raise HTTPException(422, "Les frais ne sont pas autorisés sur une entrée.")
+    if kind == "transfer":
+        if aid == dest:
+            raise HTTPException(422, "Choisissez deux comptes différents.")
+        owned(db, "accounts", uid, dest, True)
+        debit(db, uid, aid, amount + fee, personal=False)
+        credit(db, uid, dest, amount)
+        if fee:
+            liquid = one(
+                db,
+                "SELECT COALESCE(sum(balance),0) n FROM accounts WHERE user_id=%s AND is_active",
+                [uid],
+            )["n"]
+            held = one(
+                db,
+                "SELECT COALESCE(sum(initial_amount-spent_amount-returned_amount),0) n FROM funds WHERE user_id=%s",
+                [uid],
+            )["n"]
+            if liquid < held:
+                raise HTTPException(422, "Ces frais utiliseraient des fonds de tiers.")
+    elif kind == "expense":
+        debit(db, uid, aid, amount + fee)
+    else:
+        credit(db, uid, aid, amount)
+    tid = transaction(
+        db,
+        uid,
+        aid,
+        kind,
+        amount,
+        text(data.get("category", "Général")),
+        text(data.get("description", ""), 1000, False),
+        fee,
+        dest if kind == "transfer" else None,
+        when=day(data.get("date")),
+    )
+    return dict(success=True, id=tid)
+
+
+def create_loan(db, user, data, kind):
+    uid, lid = user["id"], identifier()
+    amount = money(data.get("amount"))
+    contact = text(
+        data.get("lender_name") if kind == "borrowed" else data.get("borrower_name")
+    )
+    aid = data.get("account_id") if kind == "borrowed" else data.get("from_account_id")
+    title = text(data.get("title"))
+    if aid:
+        (credit if kind == "borrowed" else debit)(db, uid, aid, amount)
+    elif kind == "given":
+        raise HTTPException(422, "Compte à débiter obligatoire.")
+    db.execute(
+        "INSERT INTO loans(id,user_id,kind,contact_name,title,initial_amount,current_balance,account_id,due_date,notes) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        [
+            lid,
+            uid,
+            kind,
+            contact,
+            title,
+            amount,
+            amount,
+            aid or None,
+            day(data["due_date"]) if data.get("due_date") else None,
+            text(data.get("notes", ""), 1000, False),
+        ],
+    )
+    if aid:
+        transaction(
+            db,
+            uid,
+            aid,
+            "income" if kind == "borrowed" else "expense",
+            amount,
+            "Emprunt reçu" if kind == "borrowed" else "Prêt accordé",
+            f"{title} · {contact}",
+            loan=lid,
+        )
+    return dict(success=True, id=lid)
+
+
+def repay(db, user, data, kind):
+    uid = user["id"]
+    loan = owned(db, "loans", uid, data.get("loan_id"))
+    if loan["kind"] != kind:
+        raise HTTPException(404, "Engagement introuvable.")
+    amount = money(data.get("amount"))
+    if amount > loan["current_balance"]:
+        raise HTTPException(422, "Le versement dépasse le solde restant dû.")
+    aid = data.get("account_id") if kind == "borrowed" else data.get("to_account_id")
+    acc = (debit if kind == "borrowed" else credit)(db, uid, aid, amount)
+    remaining, rid = loan["current_balance"] - amount, identifier()
+    ordinal = one(
+        db,
+        "SELECT count(*)+1 n FROM receipts WHERE loan_id=%s AND user_id=%s",
+        [loan["id"], uid],
+    )["n"]
+    notes = text(data.get("notes", ""), 1000, False)
+    snapshot = dict(
+        id=rid,
+        receipt_no="SL-"
+        + date.today().strftime("%Y%m%d")
+        + "-"
+        + rid[:13].replace("-", "").upper(),
+        loan_id=loan["id"],
+        loan_type=kind,
+        loan_title=loan["title"],
+        contact_name=loan["contact_name"],
+        issuer_name=user["name"],
+        currency=user["currency"],
+        initial_amount=str(loan["initial_amount"]),
+        amount=str(amount),
+        remaining_balance_before=str(loan["current_balance"]),
+        remaining_balance_after=str(remaining),
+        total_paid=str(loan["initial_amount"] - remaining),
+        installment_number=ordinal,
+        date=date.today().isoformat(),
+        account_name=acc["name"],
+        account_type=acc["type"],
+        notes=notes,
+    )
+    snapshot["document_hash"] = hashlib.sha256(
+        json.dumps(snapshot, sort_keys=True, ensure_ascii=False).encode()
+    ).hexdigest()
+    db.execute(
+        "UPDATE loans SET current_balance=%s,status=%s WHERE id=%s AND user_id=%s",
+        [remaining, "settled" if remaining == 0 else "active", loan["id"], uid],
+    )
+    db.execute(
+        "INSERT INTO receipts(id,user_id,loan_id,account_id,receipt_no,installment_number,amount,remaining_balance_after,snapshot) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        [
+            rid,
+            uid,
+            loan["id"],
+            aid,
+            snapshot["receipt_no"],
+            ordinal,
+            amount,
+            remaining,
+            Jsonb(snapshot),
+        ],
+    )
+    transaction(
+        db,
+        uid,
+        aid,
+        "expense" if kind == "borrowed" else "income",
+        amount,
+        "Remboursement emprunt" if kind == "borrowed" else "Remboursement prêt",
+        f'Versement n° {ordinal} · {loan["title"]}',
+        loan=loan["id"],
+    )
+    return dict(
+        success=True, receipt=dict(repayment_id=rid, collection_id=rid, **snapshot)
+    )
+
+
+def create_fund(db, user, data):
+    uid, fid = user["id"], identifier()
+    amount = money(data.get("amount"))
+    aid = data.get("account_id")
+    credit(db, uid, aid, amount)
+    person, reason = text(data.get("person_name")), text(data.get("reason"))
+    db.execute(
+        "INSERT INTO funds(id,user_id,person_name,phone,reason,initial_amount,account_id,date_received) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+        [
+            fid,
+            uid,
+            person,
+            text(data.get("phone", ""), 80, False),
+            reason,
+            amount,
+            aid,
+            day(data.get("date_received")),
+        ],
+    )
+    transaction(
+        db,
+        uid,
+        aid,
+        "income",
+        amount,
+        "Fonds confiés",
+        f"{person} · {reason}",
+        fund=fid,
+        when=day(data.get("date_received")),
+    )
+    return dict(success=True, id=fid)
+
+
+def refund(db, user, data):
+    uid = user["id"]
+    fund = owned(db, "funds", uid, data.get("fund_id"))
+    amount = money(data.get("amount"))
+    remaining = fund["initial_amount"] - fund["spent_amount"] - fund["returned_amount"]
+    if amount > remaining:
+        raise HTTPException(422, "Le montant dépasse le reliquat confié.")
+    debit(db, uid, data.get("account_id"), amount, personal=False)
+    db.execute(
+        "UPDATE funds SET returned_amount=returned_amount+%s,status=%s WHERE id=%s AND user_id=%s",
+        [amount, "settled" if amount == remaining else "active", fund["id"], uid],
+    )
+    transaction(
+        db,
+        uid,
+        data["account_id"],
+        "expense",
+        amount,
+        "Restitution tiers",
+        text(data.get("notes", ""), 1000, False),
+        fund=fund["id"],
+    )
+    return dict(success=True)
+
+
+def spend_fund(db, user, data):
+    uid = user["id"]
+    fund = owned(db, "funds", uid, data.get("fund_id"))
+    amount, fee = money(data.get("amount")), money(data.get("fee", 0), True)
+    total = amount + fee
+    remaining = fund["initial_amount"] - fund["spent_amount"] - fund["returned_amount"]
+    if total > remaining:
+        raise HTTPException(
+            422, "Le montant et les frais dépassent le reliquat confié."
+        )
+    aid = data.get("account_id")
+    debit(db, uid, aid, total, personal=False)
+    db.execute(
+        "UPDATE funds SET spent_amount=spent_amount+%s,status=%s WHERE id=%s AND user_id=%s",
+        [total, "settled" if total == remaining else "active", fund["id"], uid],
+    )
+    tid = transaction(
+        db,
+        uid,
+        aid,
+        "expense",
+        amount,
+        "Achat pour tiers",
+        text(data.get("description"), 1000),
+        fee,
+        fund=fund["id"],
+        when=day(data.get("date")),
+    )
+    return dict(success=True, id=tid)

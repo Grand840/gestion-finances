@@ -1,11 +1,14 @@
 // Service Worker pour l'accès PWA hors-ligne
-const CACHE_NAME = "sillage-pwa-v2";
+const CACHE_NAME = "sillage-family-v4";
 const ASSETS_TO_CACHE = [
   "/",
   "/index.html",
   "/manifest.json",
   "/css/app.css",
   "/css/sillage.css",
+  "/css/family.css",
+  "/js/family.js",
+  "/icons/stamp.svg",
   "/icons/sprite.svg",
   "/icons/mark.svg",
   "/icons/icon-192.png",
@@ -46,7 +49,8 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== "GET" || url.origin !== self.location.origin)
     return;
-  if (url.pathname.startsWith("/api/")) {
+  // Only the explicit public shell may enter a cache (including encoded API aliases).
+  if (!ASSETS_TO_CACHE.includes(url.pathname) || url.search) {
     event.respondWith(
       fetch(event.request).catch(() => {
         return new Response(JSON.stringify({ error: "Mode hors-ligne" }), {

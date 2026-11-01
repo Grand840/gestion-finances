@@ -15,29 +15,18 @@ const App = {
     settings: {},
     currentTab: "dashboard",
     txFilter: "all",
-    pinInput: "",
-    isLocked: false,
   },
 
   async init() {
     this.bindEvents();
-    this.switchTab(location.hash.slice(1) || "dashboard");
-    await this.loadInitialData();
-
-    if (this.state.metrics.pin_enabled) {
-      this.lockApp();
-    } else {
-      this.unlockApp();
-    }
-
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker
-        .register("/sw.js")
-        .catch((err) => console.log("SW registration error:", err));
-    }
+    await Family.init();
+    if ("serviceWorker" in navigator)
+      navigator.serviceWorker.register("/sw.js").catch(() => {});
   },
 
   async loadInitialData() {
+    const epoch = Family.epoch;
+    const serial = (this.loadSerial = (this.loadSerial || 0) + 1);
     try {
       const [
         metrics,
@@ -59,6 +48,8 @@ const App = {
         API.getSettings(),
       ]);
 
+      if (epoch !== Family.epoch || serial !== this.loadSerial || !Family.user)
+        return;
       this.state.metrics = metrics;
       this.state.accounts = accounts;
       this.state.transactions = transactions;
@@ -69,8 +60,12 @@ const App = {
       this.state.settings = settings;
 
       this.render();
+      if (this.state.currentTab === "account-detail")
+        await Family.openAccount(Family.accountId, false);
       document.getElementById("loadError").hidden = true;
     } catch (err) {
+      if (epoch !== Family.epoch || serial !== this.loadSerial || !Family.user)
+        return;
       document.getElementById("loadError").hidden = false;
       this.notify("Chargement impossible. Réessayez dans un instant.", true);
       console.error("Erreur chargement:", err);
@@ -79,13 +74,14 @@ const App = {
 
   formatMoney(amount, currency = null) {
     const cur = currency || this.state.metrics.currency || "FCFA";
-    const num = Math.round(Number(amount) || 0);
-    return `${num.toLocaleString("fr-FR")} ${cur}`;
+    return `${(Number(amount) || 0).toLocaleString("fr-FR", { maximumFractionDigits: 2 })} ${cur}`;
   },
 
   formatDate(dateStr) {
     if (!dateStr) return "";
-    const d = new Date(dateStr);
+    const d = new Date(
+      /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? dateStr + "T12:00:00" : dateStr,
+    );
     return d.toLocaleDateString("fr-FR", {
       day: "2-digit",
       month: "short",
@@ -107,33 +103,25 @@ const App = {
       .getElementById("transactionSearch")
       .addEventListener("input", () => this.renderTransactions());
     document.addEventListener("keydown", (e) => {
-      if (
-        this.state.isLocked &&
-        (/^\d$/.test(e.key) || ["Backspace", "Enter"].includes(e.key))
-      ) {
-        e.preventDefault();
-        this.handlePinKey(
-          e.key === "Backspace" ? "DEL" : e.key === "Enter" ? "OK" : e.key,
-        );
-        return;
-      }
       if (e.key === "Escape") {
         const modal = document.querySelector(".modal-overlay.active");
         if (modal) this.closeModal(modal);
         this.toggleMenu(false);
       }
-      const modal = this.state.isLocked
-        ? document.getElementById("pinScreen")
-        : document.querySelector(".modal-overlay.active");
+      const modal = document.querySelector(".modal-overlay.active");
       if (e.key === "Tab" && modal) {
         const focusable = [
           ...modal.querySelectorAll(
-            'button, input, select, textarea, [tabindex="0"]',
+            'a[href], button, input, select, textarea, [tabindex="0"]',
           ),
         ].filter((el) => !el.disabled && el.getClientRects().length);
         const first = focusable[0],
           last = focusable[focusable.length - 1];
-        if (e.shiftKey && document.activeElement === first) {
+        if (
+          e.shiftKey &&
+          (document.activeElement === first ||
+            document.activeElement === modal.querySelector(".modal-content"))
+        ) {
           e.preventDefault();
           last?.focus();
         } else if (!e.shiftKey && document.activeElement === last) {
@@ -342,10 +330,19 @@ const App = {
     ],
     assets: ["Patrimoine", "Une vue d’ensemble de ce que vous construisez."],
     settings: ["Paramètres", "Un espace qui s’adapte à vous."],
+    "account-detail": [
+      "Détail du compte",
+      "Chaque mouvement, chaque motif, en toute clarté.",
+    ],
+    admin: [
+      "Gestion de la famille",
+      "Des accès maîtrisés. Des espaces personnels.",
+    ],
   },
 
   switchTab(tab, updateHash = true) {
     if (!this.pages[tab]) tab = "dashboard";
+    if (tab === "admin" && Family.user?.role !== "admin") tab = "dashboard";
     this.state.currentTab = tab;
     document.querySelectorAll(".nav-item[data-tab]").forEach((b) => {
       b.classList.toggle("active", b.dataset.tab === tab);
@@ -368,7 +365,8 @@ const App = {
     if (updateHash && location.hash !== `#${tab}`)
       history.pushState(null, "", `#${tab}`);
     this.toggleMenu(false);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    Family.onTab(tab);
+    window.scrollTo({ top: 0, behavior: "auto" });
   },
 
   toggleMenu(
@@ -416,7 +414,16 @@ const App = {
 
   closeModal(modal) {
     modal.classList.remove("active");
-    this.modalTrigger?.focus();
+    if (!document.querySelector(".modal-overlay.active")) {
+      document.body.classList.remove("modal-open");
+      document
+        .querySelectorAll(
+          ".sidebar, .app-header, .main-content, .app-footer, .bottom-nav",
+        )
+        .forEach((el) => (el.inert = false));
+    }
+    if (this.modalTrigger?.isConnected)
+      this.modalTrigger.focus({ preventScroll: true });
   },
 
   emptyState(icon, title, text, action = "") {
@@ -440,7 +447,7 @@ const App = {
 
     // 1. Hero Card : Capital Propre Disponible (Fonds 100% personnels)
     document.getElementById("dashRealAvailable").innerHTML =
-      `${Math.round(Number(m.real_available_cash) || 0).toLocaleString("fr-FR")}<span class=currency>${this.escapeHtml(m.currency || "FCFA")}</span>`;
+      `${(Number(m.real_available_cash) || 0).toLocaleString("fr-FR", { maximumFractionDigits: 2 })}<span class=currency>${this.escapeHtml(m.currency || "FCFA")}</span>`;
     document.getElementById("dashTotalInHand").textContent = this.formatMoney(
       m.total_cash_in_hand,
     );
@@ -471,7 +478,7 @@ const App = {
         .slice(0, 4)
         .map((acc) => {
           const [icon, label] = types[acc.type] || ["wallet", "Compte"];
-          return `<div class="account-tile"><div class="account-tile-header"><span class="pill-tag" style="background:var(--bg-subtle);color:var(--text-muted)">${label}</span>${this.icon(icon)}</div><div class="account-tile-name">${this.escapeHtml(acc.name)}</div><div class="account-tile-balance">${this.formatMoney(acc.balance, acc.currency)}</div></div>`;
+          return `<div class="account-tile" role="button" tabindex="0" data-account-id="${acc.id}" aria-label="Ouvrir ${this.escapeHtml(acc.name)}"><div class="account-tile-header"><span class="pill-tag" style="background:var(--bg-subtle);color:var(--text-muted)">${label}</span>${this.icon(icon)}</div><div class="account-tile-name">${this.escapeHtml(acc.name)}</div><div class="account-tile-balance">${this.formatMoney(acc.balance, acc.currency)}</div></div>`;
         })
         .join("") ||
       this.emptyState(
@@ -934,95 +941,7 @@ const App = {
   },
 
   displayReceipt(r) {
-    const isBorrowed = r.loan_type === "borrowed";
-    const typeTitle = isBorrowed
-      ? "REÇU DE REMBOURSEMENT D'EMPRUNT"
-      : "QUITTANCE DE RÈGLEMENT DE PRÊT";
-    const partyLabel = isBorrowed
-      ? "Bénéficiaire (Créancier)"
-      : "Débiteur (Emprunteur)";
-    const payerLabel = isBorrowed ? "Payé par" : "Encaissé par";
-    const userName = this.state.metrics.user_name || "Moi";
-    const isSettled = r.remaining_balance_after <= 0;
-
-    const receiptHtml = `
-      <div id="printableReceiptArea" class="receipt-wrapper">
-        <div class="receipt-header">
-          <div class="receipt-republic">SILLAGE • REGISTRE FINANCIER PERSONNEL</div>
-          <div class="receipt-type-badge">${typeTitle}</div>
-          <div class="receipt-no">N° REÇU : ${r.receipt_no || "REC-" + r.id.substring(0, 8).toUpperCase()}</div>
-          <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 4px;">Émis à Lomé le ${this.formatDate(r.date || r.created_at)}</div>
-        </div>
-
-        <table class="receipt-table">
-          <tr>
-            <th>Objet / Motif de l'engagement</th>
-            <td>${this.escapeHtml(r.loan_title)}</td>
-          </tr>
-          <tr>
-            <th>${partyLabel}</th>
-            <td>${r.contact_name}</td>
-          </tr>
-          <tr>
-            <th>${payerLabel}</th>
-            <td>${userName}</td>
-          </tr>
-          <tr>
-            <th>Montant Total Initial Engagé</th>
-            <td>${this.formatMoney(r.initial_amount)}</td>
-          </tr>
-          <tr>
-            <th>Nature du Présent Versement</th>
-            <td><strong style="color: var(--gold-primary);">${this.formatInstallment(r.installment_number, isSettled)}</strong></td>
-          </tr>
-          <tr class="receipt-highlight-row">
-            <th>MONTANT VERSÉ CE JOUR</th>
-            <td>${this.formatMoney(r.amount)}</td>
-          </tr>
-          <tr>
-            <th>Reste Dû Après Ce Versement</th>
-            <td>
-              <span style="color: ${isSettled ? "var(--forest-green)" : "var(--bordeaux-red)"}; font-weight: 850;">
-                ${isSettled ? "SOLDÉ (0 FCFA)" : this.formatMoney(r.remaining_balance_after)}
-              </span>
-            </td>
-          </tr>
-          <tr>
-            <th>Moyen de Règlement Utilisé</th>
-            <td>${this.escapeHtml(r.account_name)} (${r.account_type.toUpperCase()})</td>
-          </tr>
-          ${
-            r.notes
-              ? `
-            <tr>
-              <th>Remarques / Référence</th>
-              <td>${this.escapeHtml(r.notes)}</td>
-            </tr>
-          `
-              : ""
-          }
-        </table>
-
-        <div class="receipt-signatures">
-          <div class="signature-box">
-            <div class="signature-title">Signature de la Partie Versante</div>
-            <div class="signature-line">Mention « Lu et approuvé »</div>
-          </div>
-          <div class="signature-box">
-            <div class="signature-title">Signature de la Partie Bénéficiaire</div>
-            <div class="signature-line">Pour acquit et décharge</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="no-print" style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px;">
-        <button class="btn btn-secondary" onclick="App.closeModal(document.getElementById('receiptModal'))">Fermer</button>
-        <button class="btn btn-gold" onclick="window.print()"><svg class=icon aria-hidden=true><use href=/icons/sprite.svg#print></use></svg> Imprimer en PDF</button>
-      </div>
-    `;
-
-    document.getElementById("receiptModalContent").innerHTML = receiptHtml;
-    this.openModal("receiptModal");
+    Family.displayReceipt(r);
   },
 
   // ==================== RENDU COMPTES TOGO ====================
@@ -1031,7 +950,7 @@ const App = {
     list.innerHTML = this.state.accounts
       .map(
         (acc) => `
-      <div class="account-tile" style="margin-bottom: 12px;">
+      <div class="account-tile" role="button" tabindex="0" data-account-id="${acc.id}" aria-label="Ouvrir ${this.escapeHtml(acc.name)}" style="margin-bottom: 12px;">
         <div class="account-tile-header">
           <span class="pill-tag" style="background-color: var(--bg-subtle); color: var(--text-medium);">${{ momo: "Mobile Money", cash: "Espèces", bank: "Banque" }[acc.type] || "Compte"}</span>
           <span style="font-size: 1.25rem;">${acc.type === "momo" ? "<svg class=icon aria-hidden=true><use href=/icons/sprite.svg#phone></use></svg>" : acc.type === "cash" ? "<svg class=icon aria-hidden=true><use href=/icons/sprite.svg#cash></use></svg>" : "<svg class=icon aria-hidden=true><use href=/icons/sprite.svg#bank></use></svg>"}</span>
@@ -1105,6 +1024,7 @@ const App = {
             !isSettled
               ? `
             <div style="margin-top: 14px; display: flex; justify-content: flex-end;">
+              <button class="btn btn-secondary btn-sm" style="margin-right:8px" onclick="Family.spendFund('${item.id}')">Enregistrer un achat</button>
               <button class="btn btn-secondary btn-sm" onclick="App.openRefundModal('${item.id}')">
                 Restituer le reliquat
               </button>
@@ -1166,7 +1086,6 @@ const App = {
     const m = this.state.metrics;
     document.getElementById("settingCurrency").value = m.currency || "FCFA";
     document.getElementById("settingUserName").value = m.user_name || "Moi";
-    document.getElementById("settingPinToggle").checked = m.pin_enabled;
   },
 
   // ==================== MODALS & TRAITEMENTS ====================
@@ -1190,7 +1109,8 @@ const App = {
     });
 
     const dateInputs = modal.querySelectorAll('input[type="date"]');
-    const today = new Date().toISOString().split("T")[0];
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
     dateInputs.forEach((d) => {
       if (d.required && !d.value) d.value = today;
     });
@@ -1199,9 +1119,22 @@ const App = {
     if (modalId === "quickAddModal")
       this.updateQuickAddForm(document.getElementById("quickTransType").value);
     modal.classList.add("active");
-    requestAnimationFrame(() =>
-      modal.querySelector("input:not([type=hidden]), select, button")?.focus(),
-    );
+    document.body.classList.add("modal-open");
+    document
+      .querySelectorAll(
+        ".sidebar, .app-header, .main-content, .app-footer, .bottom-nav",
+      )
+      .forEach((el) => (el.inert = true));
+    // Focus synchronously: a deferred frame can steal focus during fast input.
+    const content = modal.querySelector(".modal-content");
+    content.scrollTop = 0;
+    content.tabIndex = -1;
+    const target =
+      modalId === "receiptModal"
+        ? content
+        : modal.querySelector("input:not([type=hidden]), select, textarea") ||
+          content;
+    target.focus({ preventScroll: true });
   },
 
   updateQuickAddForm(type) {
@@ -1381,7 +1314,7 @@ const App = {
       this.notify("Opération enregistrée.");
       await this.loadInitialData();
 
-      // Afficher le reçu officiel immédiatement
+      // Afficher immédiatement le reçu applicatif
       if (res.receipt && res.receipt.repayment_id) {
         await this.openReceiptModal(res.receipt.repayment_id);
       }
@@ -1598,104 +1531,17 @@ const App = {
 
   // 8. Paramètres
   async handleSaveSettings() {
-    const currency = document.getElementById("settingCurrency").value;
-    const userName = document.getElementById("settingUserName").value;
-    const pinEnabled = document.getElementById("settingPinToggle").checked
-      ? "1"
-      : "0";
-    const newPin = document.getElementById("settingNewPin").value;
-
-    const payload = {
-      main_currency: currency,
-      user_name: userName,
-      pin_enabled: pinEnabled,
-    };
-
-    if (newPin && !/^\d{4,6}$/.test(newPin)) {
-      this.notify("Le code PIN doit contenir 4 à 6 chiffres.", true);
-      return;
-    }
-    if (newPin) {
-      payload.pin_code = newPin;
-    }
-
     try {
-      await API.updateSettings(payload);
-      this.notify("Préférences enregistrées.");
+      await API.updateSettings({
+        user_name: document.getElementById("settingUserName").value,
+        main_currency: document.getElementById("settingCurrency").value,
+      });
       await this.loadInitialData();
+      await Family.checkSession();
+      this.notify("Préférences enregistrées.");
     } catch (err) {
       this.notify(err.message, true);
     }
-  },
-
-  // 9. Code PIN
-  lockApp() {
-    this.state.isLocked = true;
-    this.state.pinInput = "";
-    this.updatePinDots();
-    document
-      .querySelectorAll(
-        ".sidebar, .app-header, .main-content, .app-footer, .bottom-nav",
-      )
-      .forEach((el) => (el.inert = true));
-    document.getElementById("pinScreen").classList.add("active");
-    document.querySelector("#pinScreen .pin-key").focus();
-  },
-
-  unlockApp() {
-    this.state.isLocked = false;
-    document.getElementById("pinScreen").classList.remove("active");
-    document
-      .querySelectorAll(
-        ".sidebar, .app-header, .main-content, .app-footer, .bottom-nav",
-      )
-      .forEach((el) => (el.inert = false));
-  },
-
-  async handlePinKey(val) {
-    if (val === "C") {
-      this.state.pinInput = "";
-    } else if (val === "DEL") {
-      this.state.pinInput = this.state.pinInput.slice(0, -1);
-    } else if (/^\d$/.test(val)) {
-      if (this.state.pinInput.length < 6) {
-        this.state.pinInput += val;
-      }
-    }
-
-    this.updatePinDots();
-
-    if (val === "OK" && this.state.pinInput.length >= 4) {
-      try {
-        const res = await API.verifyPin(this.state.pinInput);
-        if (res.valid) {
-          this.unlockApp();
-        } else {
-          this.notify("Code incorrect. Réessayez.", true);
-          this.state.pinInput = "";
-          this.updatePinDots();
-        }
-      } catch (e) {
-        if (this.state.pinInput.length >= 4) {
-          this.notify(e.message || "Vérification impossible. Réessayez.", true);
-          const dots = document.getElementById("pinDots");
-          dots.style.animation = "shake 0.3s ease";
-          setTimeout(() => {
-            dots.style.animation = "";
-            this.state.pinInput = "";
-            this.updatePinDots();
-          }, 350);
-        }
-      }
-    }
-  },
-
-  updatePinDots() {
-    const dots = document.querySelectorAll(".pin-dot");
-    const len = this.state.pinInput.length;
-    dots.forEach((dot, index) => {
-      dot.classList.toggle("filled", index < len);
-    });
   },
 
   async downloadBackup() {

@@ -4,3 +4,10 @@ __pycache__/
 *.db-shm
 node_modules/
 test-results/
+.venv/
+.env
+.env.*
+!.env.example
+.pytest_cache/
+backups/
+.local/

@@ -1,390 +1,827 @@
-#!/usr/bin/env python3
-"""
-Serveur Financier & Patrimoine (Togo - FCFA)
-Support des comptes locaux (T-Money, Moov Money, Cash, Banques), graphiques et reçus PDF d'acomptes.
-"""
+"""Sillage family server: cookie sessions, PostgreSQL and isolated financial spaces."""
 
-import http.server
-import socketserver
+import hashlib
+import hmac
 import json
+import logging
 import os
-import urllib.parse
-from datetime import datetime
-import database
+import re
+import secrets
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from urllib.parse import urlparse
 
-PORT = 8080
-PUBLIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "public")
+from argon2 import PasswordHasher
+from argon2.exceptions import VerificationError, InvalidHashError
+from fastapi import FastAPI, Request, Response, HTTPException, Depends
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+from psycopg.errors import IntegrityError
+from psycopg.types.json import Jsonb
+from pydantic import BaseModel, Field, ConfigDict
 
-database.init_db()
+import database as store
+from receipts import build_pdf
 
-class FinanceRequestHandler(http.server.SimpleHTTPRequestHandler):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=PUBLIC_DIR, **kwargs)
+ROOT = Path(__file__).parent
+PASSWORDS = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=2)
+DUMMY_HASH = PASSWORDS.hash(secrets.token_urlsafe(24))
+COOKIE = "sillage_session"
+SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
+SESSION_HOURS = int(os.getenv("SESSION_HOURS", "24"))
 
-    def end_headers(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Pin-Code")
-        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-        super().end_headers()
 
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.end_headers()
+@asynccontextmanager
+async def lifespan(app):
+    store.init_db()
+    with store.connect() as db:
+        if (
+            not store.one(db, "SELECT id FROM users LIMIT 1")
+            and len(os.getenv("SETUP_TOKEN", "")) < 16
+        ):
+            raise RuntimeError(
+                "Définissez un SETUP_TOKEN aléatoire de 16 caractères minimum pour créer le premier administrateur."
+            )
+    yield
+    store.pool.close()
 
-    def do_GET(self):
-        parsed = urllib.parse.urlparse(self.path)
-        path = parsed.path
-        query = urllib.parse.parse_qs(parsed.query)
 
-        if path.startswith("/api/"):
-            self.handle_api_get(path, query)
-        else:
-            local_path = os.path.join(PUBLIC_DIR, path.lstrip("/"))
-            if not os.path.exists(local_path) or os.path.isdir(local_path):
-                self.path = "/index.html"
-            super().do_GET()
+app = FastAPI(
+    title="Sillage",
+    version="2.0.0",
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 
-    def do_POST(self):
-        parsed = urllib.parse.urlparse(self.path)
-        path = parsed.path
-        content_length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else "{}"
+
+@app.middleware("http")
+async def security(request, call_next):
+    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        origin = request.headers.get("origin")
+        if origin and (
+            urlparse(origin).netloc != request.headers.get("host")
+            or urlparse(origin).scheme != request.url.scheme
+        ):
+            return JSONResponse({"error": "Origine de la requête refusée."}, 403)
         try:
-            data = json.loads(body) if body else {}
-        except json.JSONDecodeError:
-            data = {}
+            if int(request.headers.get("content-length", "0")) > 65536:
+                return JSONResponse({"error": "Requête trop volumineuse."}, 413)
+        except ValueError:
+            return JSONResponse({"error": "Requête invalide."}, 400)
+        chunks, size = [], 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > 65536:
+                return JSONResponse({"error": "Requête trop volumineuse."}, 413)
+            chunks.append(chunk)
+        request._body = b"".join(chunks)
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "same-origin"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'"
+    )
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store, private"
+    return response
 
-        if path.startswith("/api/"):
-            self.handle_api_post(path, data)
+
+@app.exception_handler(HTTPException)
+async def http_error(request, exc):
+    return JSONResponse({"error": exc.detail}, exc.status_code)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request, exc):
+    return JSONResponse(
+        {"error": "Formulaire invalide. Vérifiez les champs et leur longueur."}, 422
+    )
+
+
+@app.exception_handler(IntegrityError)
+async def integrity_error(request, exc):
+    logging.warning(
+        "Database constraint prevented an invalid write (%s)", type(exc).__name__
+    )
+    return JSONResponse(
+        {"error": "Cette opération entre en conflit avec les données existantes."}, 409
+    )
+
+
+class Form(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+
+class Login(Form):
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=1, max_length=128)
+
+
+class Register(Login):
+    name: str = Field(min_length=2, max_length=80)
+    code: str = Field(min_length=1, max_length=160)
+
+
+class PasswordChange(Form):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=12, max_length=128)
+
+
+class MemberStatus(Form):
+    active: bool
+
+
+def digest(token):
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def email_address(value):
+    value = value.strip().lower()
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value):
+        raise HTTPException(422, "Adresse e-mail invalide.")
+    return value
+
+
+def password_valid(value):
+    if not 12 <= len(value) <= 128 or not value.strip():
+        raise HTTPException(422, "Utilisez un mot de passe de 12 à 128 caractères.")
+    return value
+
+
+def verify(encoded, password):
+    try:
+        return PASSWORDS.verify(encoded, password)
+    except (VerificationError, InvalidHashError):
+        return False
+
+
+def user_view(user):
+    return {
+        key: user[key]
+        for key in (
+            "id",
+            "name",
+            "email",
+            "role",
+            "active",
+            "currency",
+            "created_at",
+            "last_login",
+        )
+    }
+
+
+def consume_attempt(key, limit):
+    with store.connect() as db:
+        db.execute(
+            "DELETE FROM auth_attempts WHERE window_start<now()-interval '1 day'"
+        )
+        row = store.one(
+            db,
+            """INSERT INTO auth_attempts(key,failures) VALUES (%s,1) ON CONFLICT(key) DO UPDATE
+        SET failures=CASE WHEN auth_attempts.window_start<now()-interval '15 minutes' THEN 1 ELSE auth_attempts.failures+1 END,
+        window_start=CASE WHEN auth_attempts.window_start<now()-interval '15 minutes' THEN now() ELSE auth_attempts.window_start END RETURNING failures""",
+            [digest(key)],
+        )
+    if row["failures"] > limit:
+        raise HTTPException(429, "Trop de tentatives. Réessayez dans 15 minutes.")
+
+
+def new_session(db, user, response):
+    token, csrf = secrets.token_urlsafe(48), secrets.token_urlsafe(32)
+    db.execute("DELETE FROM sessions WHERE expires_at<now()")
+    db.execute(
+        "INSERT INTO sessions(token_hash,user_id,csrf,expires_at) VALUES (%s,%s,%s,%s)",
+        [
+            digest(token),
+            user["id"],
+            csrf,
+            datetime.now(timezone.utc) + timedelta(hours=SESSION_HOURS),
+        ],
+    )
+    db.execute("UPDATE users SET last_login=now() WHERE id=%s", [user["id"]])
+    response.set_cookie(
+        COOKIE,
+        token,
+        max_age=SESSION_HOURS * 3600,
+        httponly=True,
+        secure=SECURE,
+        samesite="lax",
+        path="/",
+    )
+    return dict(authenticated=True, user=user_view(user), csrf_token=csrf)
+
+
+def session_user(request):
+    token = request.cookies.get(COOKIE, "")
+    if not token or len(token) > 200:
+        return None
+    with store.connect() as db:
+        return store.one(
+            db,
+            """SELECT u.*,s.csrf,s.token_hash,s.expires_at FROM users u JOIN sessions s ON s.user_id=u.id
+                                 WHERE s.token_hash=%s AND s.expires_at>now() AND u.active""",
+            [digest(token)],
+        )
+
+
+def current_user(request: Request):
+    user = session_user(request)
+    if not user:
+        raise HTTPException(401, "Connectez-vous pour accéder à votre espace.")
+    if request.method not in ("GET", "HEAD") and not hmac.compare_digest(
+        user["csrf"].encode(), request.headers.get("x-csrf-token", "").encode()
+    ):
+        raise HTTPException(403, "Session de formulaire expirée. Actualisez la page.")
+    return user
+
+
+def admin(user=Depends(current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(403, "Accès réservé à l’administrateur.")
+    return user
+
+
+@app.get("/api/health")
+def health():
+    with store.connect() as db:
+        db.execute("SELECT 1")
+    return dict(status="ok", database="postgresql")
+
+
+@app.get("/api/auth/status")
+def auth_status(request: Request):
+    user = session_user(request)
+    if user:
+        return dict(
+            authenticated=True,
+            user=user_view(user),
+            csrf_token=user["csrf"],
+            expires_at=user["expires_at"],
+        )
+    with store.connect() as db:
+        bootstrap = not bool(store.one(db, "SELECT id FROM users LIMIT 1"))
+    return dict(
+        authenticated=False, bootstrap_required=bootstrap, registration="invitation"
+    )
+
+
+@app.post("/api/auth/register")
+def register(data: Register, request: Request, response: Response):
+    consume_attempt("register:" + request.client.host, 15)
+    email = email_address(data.email)
+    encoded = PASSWORDS.hash(password_valid(data.password))
+    with store.connect() as db:
+        db.execute("SELECT pg_advisory_xact_lock(837402)")
+        first = not store.one(db, "SELECT id FROM users LIMIT 1")
+        if first:
+            if not hmac.compare_digest(
+                data.code.encode(), os.environ["SETUP_TOKEN"].encode()
+            ):
+                raise HTTPException(403, "Code de configuration incorrect.")
         else:
-            self.send_error(404, "Not Found")
-
-    def do_DELETE(self):
-        parsed = urllib.parse.urlparse(self.path)
-        path = parsed.path
-        if path.startswith("/api/"):
-            self.handle_api_delete(path)
-        else:
-            self.send_error(404, "Not Found")
-
-    # ==================== ROUTEUR GET ====================
-    def handle_api_get(self, path, query):
-        if path == "/api/metrics":
-            metrics = database.get_dashboard_metrics()
-            self.send_json(metrics)
-            return
-
-        if path.startswith("/api/receipt/"):
-            rep_id = path.split("/")[-1]
-            rec = database.get_receipt_data(rep_id)
-            if rec:
-                self.send_json({"success": True, "receipt": rec})
-            else:
-                self.send_json({"success": False, "error": "Reçu introuvable"}, status=404)
-            return
-
-        conn = database.get_connection()
-        c = conn.cursor()
-
-        try:
-            if path == "/api/accounts":
-                c.execute("""
-                SELECT a.*, 
-                  (SELECT COUNT(*) FROM transactions t WHERE t.account_id = a.id) as transaction_count
-                FROM accounts a
-                WHERE is_active = 1
-                ORDER BY a.type, a.name
-                """)
-                accounts = [dict(row) for row in c.fetchall()]
-                self.send_json(accounts)
-
-            elif path == "/api/transactions":
-                limit = int(query.get("limit", [50])[0])
-                c.execute("""
-                SELECT t.*, 
-                  a.name as account_name, a.type as account_type, a.color as account_color,
-                  d.name as to_account_name,
-                  tpf.person_name as third_party_person
-                FROM transactions t
-                JOIN accounts a ON t.account_id = a.id
-                LEFT JOIN accounts d ON t.to_account_id = d.id
-                LEFT JOIN third_party_funds tpf ON t.third_party_fund_id = tpf.id
-                ORDER BY t.date DESC, t.created_at DESC
-                LIMIT ?
-                """, (limit,))
-                transactions = [dict(row) for row in c.fetchall()]
-                self.send_json(transactions)
-
-            # MES EMPRUNTS (avec historique de chaque acompte)
-            elif path == "/api/loans/borrowed":
-                c.execute("""
-                SELECT lb.*, a.name as disbursed_to_account_name,
-                  (initial_amount - current_balance) as total_repaid
-                FROM loans_borrowed lb
-                LEFT JOIN accounts a ON lb.disbursed_to_account_id = a.id
-                ORDER BY lb.status ASC, lb.created_at DESC
-                """)
-                loans = [dict(row) for row in c.fetchall()]
-                for l in loans:
-                    c.execute("""
-                    SELECT lr.*, acc.name as account_name 
-                    FROM loan_repayments lr 
-                    JOIN accounts acc ON lr.account_id = acc.id
-                    WHERE lr.loan_id = ? AND lr.loan_type = 'borrowed' 
-                    ORDER BY lr.installment_number ASC
-                    """, (l['id'],))
-                    l['repayments'] = [dict(r) for r in c.fetchall()]
-                self.send_json(loans)
-
-            # MES PRÊTS ACCORDÉS (avec historique de chaque acompte reçu)
-            elif path == "/api/loans/given":
-                c.execute("""
-                SELECT lg.*, a.name as funded_from_account_name,
-                  (initial_amount - current_balance) as total_collected
-                FROM loans_given lg
-                LEFT JOIN accounts a ON lg.funded_from_account_id = a.id
-                ORDER BY lg.status ASC, lg.created_at DESC
-                """)
-                loans = [dict(row) for row in c.fetchall()]
-                for l in loans:
-                    c.execute("""
-                    SELECT lr.*, acc.name as account_name 
-                    FROM loan_repayments lr 
-                    JOIN accounts acc ON lr.account_id = acc.id
-                    WHERE lr.loan_id = ? AND lr.loan_type = 'given' 
-                    ORDER BY lr.installment_number ASC
-                    """, (l['id'],))
-                    l['repayments'] = [dict(r) for r in c.fetchall()]
-                self.send_json(loans)
-
-            elif path == "/api/third-party":
-                c.execute("""
-                SELECT tpf.*, a.name as account_name,
-                  (initial_amount - spent_amount - returned_amount) as remaining_amount
-                FROM third_party_funds tpf
-                JOIN accounts a ON tpf.account_id = a.id
-                ORDER BY tpf.status ASC, tpf.created_at DESC
-                """)
-                funds = [dict(row) for row in c.fetchall()]
-                self.send_json(funds)
-
-            elif path == "/api/assets":
-                c.execute("SELECT * FROM assets ORDER BY category, name")
-                assets = [dict(row) for row in c.fetchall()]
-                self.send_json(assets)
-
-            elif path == "/api/settings":
-                c.execute("SELECT key, value FROM settings")
-                settings = dict(c.fetchall())
-                settings["pin_is_set"] = bool(settings.get("pin_code"))
-                settings.pop("pin_code", None)
-                self.send_json(settings)
-
-            elif path == "/api/export":
-                backup = {}
-                tables = ["accounts", "transactions", "loans_borrowed", "loans_given", "loan_repayments", "third_party_funds", "assets", "settings"]
-                for tbl in tables:
-                    c.execute(f"SELECT * FROM {tbl}")
-                    backup[tbl] = [dict(row) for row in c.fetchall()]
-                self.send_json(backup)
-
-            else:
-                self.send_error(404, "Endpoint introuvable")
-
-        finally:
-            conn.close()
-
-    # ==================== ROUTEUR POST ====================
-    def handle_api_post(self, path, data):
-        try:
-            if path == "/api/transactions":
-                account_id = data.get("account_id")
-                trans_type = data.get("type")
-                amount = float(data.get("amount", 0))
-                category = data.get("category", "Général")
-                description = data.get("description", "")
-                date = data.get("date")
-                fee = float(data.get("fee", 0))
-                to_account_id = data.get("to_account_id")
-                third_party_fund_id = data.get("third_party_fund_id")
-
-                tid = database.record_transaction(
-                    account_id=account_id,
-                    trans_type=trans_type,
-                    amount=amount,
-                    category=category,
-                    description=description,
-                    date=date,
-                    fee=fee,
-                    to_account_id=to_account_id,
-                    third_party_fund_id=third_party_fund_id
+            invitation = store.one(
+                db,
+                "SELECT * FROM invitations WHERE token_hash=%s AND used_at IS NULL AND expires_at>now() FOR UPDATE",
+                [digest(data.code)],
+            )
+            if not invitation:
+                raise HTTPException(
+                    403, "Invitation invalide, expirée ou déjà utilisée."
                 )
-                self.send_json({"success": True, "id": tid, "message": "Opération enregistrée"})
+            db.execute(
+                "UPDATE invitations SET used_at=now() WHERE token_hash=%s",
+                [digest(data.code)],
+            )
+        if store.one(db, "SELECT id FROM users WHERE email=%s", [email]):
+            raise HTTPException(
+                409, "Impossible de créer ce compte avec ces informations."
+            )
+        user = store.one(
+            db,
+            "INSERT INTO users(id,email,name,password_hash,role) VALUES (%s,%s,%s,%s,%s) RETURNING *",
+            [
+                store.identifier(),
+                email,
+                data.name,
+                encoded,
+                "admin" if first else "member",
+            ],
+        )
+        store.create_defaults(db, user)
+        store.audit(db, user["id"], "auth.register")
+        return new_session(db, user, response)
 
-            elif path == "/api/accounts":
-                import uuid
-                conn = database.get_connection()
-                c = conn.cursor()
-                acc_id = str(uuid.uuid4())
-                name = data.get("name", "Nouveau Compte")
-                acc_type = data.get("type", "momo")
-                balance = float(data.get("balance", 0))
-                currency = data.get("currency", "FCFA")
-                account_number = data.get("account_number", "")
-                color = data.get("color", "#8b7355")
-                now = datetime.now().isoformat()
 
-                c.execute("""
-                INSERT INTO accounts (id, name, type, balance, currency, account_number, color, is_active, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
-                """, (acc_id, name, acc_type, balance, currency, account_number, color, now))
-                conn.close()
-                self.send_json({"success": True, "id": acc_id})
+@app.post("/api/auth/login")
+def login(data: Login, request: Request, response: Response):
+    email = email_address(data.email)
+    consume_attempt("login-ip:" + request.client.host, 60)
+    consume_attempt("login-email:" + email, 15)
+    with store.connect() as db:
+        user = store.one(db, "SELECT * FROM users WHERE email=%s FOR UPDATE", [email])
+        valid = verify(user["password_hash"] if user else DUMMY_HASH, data.password)
+        if not user or not valid or not user["active"]:
+            raise HTTPException(
+                401, "Adresse e-mail ou mot de passe incorrect, ou compte désactivé."
+            )
+        if PASSWORDS.check_needs_rehash(user["password_hash"]):
+            db.execute(
+                "UPDATE users SET password_hash=%s WHERE id=%s",
+                [PASSWORDS.hash(data.password), user["id"]],
+            )
+        store.audit(db, user["id"], "auth.login")
+        return new_session(db, user, response)
 
-            # NOUVEL EMPRUNT REÇU
-            elif path == "/api/loans/borrowed":
-                lender_name = data.get("lender_name")
-                title = data.get("title", "Emprunt")
-                amount = float(data.get("amount", 0))
-                account_id = data.get("account_id")
-                due_date = data.get("due_date", "")
-                notes = data.get("notes", "")
 
-                lid = database.create_borrowed_loan(lender_name, title, amount, account_id, due_date, notes)
-                self.send_json({"success": True, "id": lid, "message": "Emprunt enregistré dans le compte dédié"})
+class Recovery(Login):
+    code: str = Field(min_length=1, max_length=160)
 
-            # REMBOURSER UN EMPRUNT (renvoie les données complètes pour impression de reçu)
-            elif path == "/api/loans/borrowed/repay":
-                loan_id = data.get("loan_id")
-                account_id = data.get("account_id")
-                amount = float(data.get("amount", 0))
-                notes = data.get("notes", "")
 
-                receipt_info = database.repay_borrowed_loan(loan_id, account_id, amount, notes)
-                self.send_json({"success": True, "receipt": receipt_info, "message": "Remboursement validé"})
+@app.post("/api/auth/recover")
+def recover(data: Recovery, request: Request):
+    consume_attempt("recovery-ip:" + request.client.host, 20)
+    email = email_address(data.email)
+    consume_attempt("recovery-email:" + email, 10)
+    with store.connect() as db:
+        user = store.one(db, "SELECT * FROM users WHERE email=%s FOR UPDATE", [email])
+        token = store.one(
+            db,
+            "SELECT * FROM password_resets WHERE token_hash=%s AND used_at IS NULL AND expires_at>now() FOR UPDATE",
+            [digest(data.code)],
+        )
+        if (
+            not user
+            or not user["active"]
+            or not token
+            or token["user_id"] != user["id"]
+        ):
+            raise HTTPException(422, "Code de récupération ou informations invalides.")
+        db.execute(
+            "UPDATE users SET password_hash=%s WHERE id=%s",
+            [PASSWORDS.hash(password_valid(data.password)), user["id"]],
+        )
+        db.execute(
+            "UPDATE password_resets SET used_at=now() WHERE user_id=%s AND used_at IS NULL",
+            [user["id"]],
+        )
+        db.execute("DELETE FROM sessions WHERE user_id=%s", [user["id"]])
+        store.audit(db, user["id"], "auth.password_recovered")
+    return dict(success=True)
 
-            # NOUVEAU PRÊT ACCORDÉ
-            elif path == "/api/loans/given":
-                borrower_name = data.get("borrower_name")
-                title = data.get("title", "Prêt accordé")
-                amount = float(data.get("amount", 0))
-                from_account_id = data.get("from_account_id")
-                due_date = data.get("due_date", "")
-                notes = data.get("notes", "")
 
-                lid = database.create_given_loan(borrower_name, title, amount, from_account_id, due_date, notes)
-                self.send_json({"success": True, "id": lid, "message": "Prêt accordé et débité du compte"})
+def recovery_code(db, uid):
+    code = secrets.token_urlsafe(32)
+    db.execute(
+        "UPDATE password_resets SET used_at=now() WHERE user_id=%s AND used_at IS NULL",
+        [uid],
+    )
+    db.execute(
+        "INSERT INTO password_resets(token_hash,user_id,expires_at) VALUES (%s,%s,now()+interval '30 minutes')",
+        [digest(code), uid],
+    )
+    return code
 
-            # ENCAISSER UN REMBOURSEMENT DE PRÊT (renvoie les données de quittance pour impression)
-            elif path == "/api/loans/given/receive":
-                loan_id = data.get("loan_id")
-                to_account_id = data.get("to_account_id")
-                amount = float(data.get("amount", 0))
-                notes = data.get("notes", "")
 
-                receipt_info = database.receive_loan_repayment(loan_id, to_account_id, amount, notes)
-                self.send_json({"success": True, "receipt": receipt_info, "message": "Acompte encaissé"})
+@app.post("/api/admin/users/{uid}/recovery")
+def create_recovery(uid: str, user=Depends(admin)):
+    with store.connect() as db:
+        target = store.one(
+            db,
+            "SELECT id FROM users WHERE id=%s AND active AND role='member' FOR UPDATE",
+            [uid],
+        )
+        if not target:
+            raise HTTPException(404, "Membre actif introuvable.")
+        code = recovery_code(db, uid)
+        store.audit(db, user["id"], "admin.recovery_created", uid)
+    return dict(code=code, expires_in_minutes=30)
 
-            # ARGENT DE TIERS
-            elif path == "/api/third-party":
-                person_name = data.get("person_name")
-                phone = data.get("phone", "")
-                reason = data.get("reason", "Mandat")
-                amount = float(data.get("amount", 0))
-                account_id = data.get("account_id")
-                date_received = data.get("date_received")
 
-                fid = database.add_third_party_fund(person_name, phone, reason, amount, account_id, date_received)
-                self.send_json({"success": True, "id": fid, "message": "Fonds tiers consigné"})
+@app.post("/api/admin/invitations/revoke")
+def revoke_invitations(user=Depends(admin)):
+    with store.connect() as db:
+        db.execute("DELETE FROM invitations WHERE used_at IS NULL")
+        store.audit(db, user["id"], "admin.invitations_revoked")
+    return dict(success=True)
 
-            elif path == "/api/third-party/refund":
-                fund_id = data.get("fund_id")
-                account_id = data.get("account_id")
-                amount = float(data.get("amount", 0))
-                notes = data.get("notes", "")
 
-                database.refund_third_party_fund(fund_id, account_id, amount, notes)
-                self.send_json({"success": True, "message": "Restitution validée"})
+@app.post("/api/auth/logout")
+def logout(response: Response, user=Depends(current_user)):
+    with store.connect() as db:
+        db.execute("DELETE FROM sessions WHERE token_hash=%s", [user["token_hash"]])
+        store.audit(db, user["id"], "auth.logout")
+    response.delete_cookie(
+        COOKIE, path="/", secure=SECURE, httponly=True, samesite="lax"
+    )
+    return dict(success=True)
 
-            # ACTIFS
-            elif path == "/api/assets":
-                name = data.get("name")
-                category = data.get("category", "material")
-                purchase_value = float(data.get("purchase_value", 0))
-                current_value = float(data.get("current_value", purchase_value))
-                purchase_date = data.get("purchase_date", "")
-                notes = data.get("notes", "")
 
-                aid = database.add_asset(name, category, purchase_value, current_value, purchase_date, notes)
-                self.send_json({"success": True, "id": aid, "message": "Actif enregistré"})
+@app.post("/api/auth/password")
+def change_password(
+    data: PasswordChange, response: Response, user=Depends(current_user)
+):
+    consume_attempt("password:" + user["id"], 15)
+    with store.connect() as db:
+        latest = store.one(
+            db, "SELECT * FROM users WHERE id=%s FOR UPDATE", [user["id"]]
+        )
+        if not latest["active"]:
+            raise HTTPException(401, "Compte désactivé.")
+        if not verify(latest["password_hash"], data.current_password):
+            raise HTTPException(422, "Mot de passe actuel incorrect.")
+        db.execute(
+            "UPDATE users SET password_hash=%s WHERE id=%s",
+            [PASSWORDS.hash(password_valid(data.new_password)), user["id"]],
+        )
+        db.execute("DELETE FROM sessions WHERE user_id=%s", [user["id"]])
+        store.audit(db, user["id"], "auth.password_changed")
+        return new_session(db, latest, response)
 
-            # SÉCURITÉ PIN
-            elif path == "/api/verify-pin":
-                entered_pin = str(data.get("pin", ""))
-                conn = database.get_connection()
-                c = conn.cursor()
-                c.execute("SELECT value FROM settings WHERE key = 'pin_code'")
-                stored_pin = c.fetchone()
-                conn.close()
-                correct_pin = stored_pin[0] if stored_pin else "1234"
-                if entered_pin == correct_pin:
-                    self.send_json({"valid": True})
-                else:
-                    self.send_json({"valid": False, "message": "Code PIN incorrect"}, status=401)
 
-            elif path == "/api/settings":
-                conn = database.get_connection()
-                c = conn.cursor()
-                for k, v in data.items():
-                    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (str(k), str(v)))
-                conn.close()
-                self.send_json({"success": True, "message": "Paramètres actualisés"})
+@app.get("/api/admin/users")
+def members(user=Depends(admin)):
+    with store.connect() as db:
+        return [
+            user_view(u)
+            for u in store.rows(db, "SELECT * FROM users ORDER BY created_at")
+        ]
 
-            else:
-                self.send_error(404, "Endpoint introuvable")
 
-        except Exception as e:
-            self.send_json({"success": False, "error": str(e)}, status=500)
+@app.post("/api/admin/invitations")
+def invite(user=Depends(admin)):
+    token = secrets.token_urlsafe(24)
+    with store.connect() as db:
+        db.execute(
+            "INSERT INTO invitations(token_hash,created_by,expires_at) VALUES (%s,%s,now()+interval '7 days')",
+            [digest(token), user["id"]],
+        )
+        store.audit(db, user["id"], "admin.invitation_created")
+    return dict(code=token, expires_in_days=7)
 
-    # ==================== ROUTEUR DELETE ====================
-    def handle_api_delete(self, path):
-        try:
-            if path.startswith("/api/assets/"):
-                asset_id = path.split("/")[-1]
-                database.delete_asset(asset_id)
-                self.send_json({"success": True, "message": "Actif supprimé"})
 
-            elif path.startswith("/api/accounts/"):
-                acc_id = path.split("/")[-1]
-                conn = database.get_connection()
-                c = conn.cursor()
-                c.execute("UPDATE accounts SET is_active = 0 WHERE id = ?", (acc_id,))
-                conn.close()
-                self.send_json({"success": True, "message": "Compte désactivé"})
-            else:
-                self.send_error(404, "Endpoint introuvable")
-        except Exception as e:
-            self.send_json({"success": False, "error": str(e)}, status=500)
+@app.post("/api/admin/users/{uid}/status")
+def member_status(uid: str, data: MemberStatus, user=Depends(admin)):
+    if uid == user["id"]:
+        raise HTTPException(422, "Vous ne pouvez pas désactiver votre propre compte.")
+    with store.connect() as db:
+        target = store.one(
+            db,
+            "UPDATE users SET active=%s WHERE id=%s AND role='member' RETURNING id",
+            [data.active, uid],
+        )
+        if not target:
+            raise HTTPException(404, "Membre introuvable.")
+        if not data.active:
+            db.execute("DELETE FROM sessions WHERE user_id=%s", [uid])
+        store.audit(
+            db,
+            user["id"],
+            "admin.member_activated" if data.active else "admin.member_disabled",
+            uid,
+        )
+    return dict(success=True)
 
-    def send_json(self, payload, status=200):
-        body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
 
-def main():
-    socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(("0.0.0.0", PORT), FinanceRequestHandler) as httpd:
-        print("Sillage — Vos finances, en clair")
-        print(f"📍 PC : http://localhost:{PORT}")
-        print(f"Réseau : port {PORT}, toutes interfaces (réseau de confiance uniquement)")
-        try:
-            httpd.serve_forever()
-        except KeyboardInterrupt:
-            print("Arrêt.")
+@app.get("/api/metrics")
+def metrics(user=Depends(current_user)):
+    with store.connect() as db:
+        return store.metrics(db, user)
+
+
+@app.get("/api/accounts")
+def accounts(include_archived: bool = False, user=Depends(current_user)):
+    with store.connect() as db:
+        return store.rows(
+            db,
+            "SELECT a.*,(SELECT count(*) FROM transactions t WHERE t.user_id=a.user_id AND (t.account_id=a.id OR t.to_account_id=a.id)) transaction_count FROM accounts a WHERE user_id=%s AND (is_active OR %s) ORDER BY type,name",
+            [user["id"], include_archived],
+        )
+
+
+@app.get("/api/transactions")
+def transactions(
+    limit: int = 200,
+    offset: int = 0,
+    account_id: str | None = None,
+    user=Depends(current_user),
+):
+    if not 1 <= limit <= 500 or not 0 <= offset <= 10000000:
+        raise HTTPException(422, "Pagination invalide.")
+    with store.connect() as db:
+        return store.list_transactions(db, user["id"], limit, offset, account_id)
+
+
+@app.get("/api/accounts/{aid}")
+def account_detail(aid: str, user=Depends(current_user)):
+    with store.connect() as db:
+        account = store.owned(db, "accounts", user["id"], aid)
+        summary = store.one(
+            db,
+            """SELECT count(*) count,
+        COALESCE(sum(CASE WHEN type='income' OR to_account_id=%s THEN amount ELSE 0 END),0) income,
+        COALESCE(sum(CASE WHEN account_id=%s AND type IN ('expense','transfer') THEN amount+fee ELSE 0 END),0) expense
+        FROM transactions WHERE user_id=%s AND (account_id=%s OR to_account_id=%s)""",
+            [aid, aid, user["id"], aid, aid],
+        )
+        return dict(account=account, summary=summary)
+
+
+@app.get("/api/loans/{kind}")
+def loans(kind: str, user=Depends(current_user)):
+    if kind not in ("given", "borrowed"):
+        raise HTTPException(404, "Rubrique introuvable.")
+    with store.connect() as db:
+        return store.list_loans(db, user["id"], kind)
+
+
+@app.get("/api/receipt/{rid}")
+def receipt(rid: str, user=Depends(current_user)):
+    with store.connect() as db:
+        return dict(
+            success=True,
+            receipt=store.owned(db, "receipts", user["id"], rid)["snapshot"],
+        )
+
+
+@app.get("/api/receipt/{rid}/pdf")
+def receipt_pdf(rid: str, user=Depends(current_user)):
+    with store.connect() as db:
+        snapshot = store.owned(db, "receipts", user["id"], rid)["snapshot"]
+    return Response(
+        build_pdf(snapshot),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{snapshot["receipt_no"]}.pdf"'
+        },
+    )
+
+
+@app.get("/api/third-party")
+def funds(user=Depends(current_user)):
+    with store.connect() as db:
+        return store.rows(
+            db,
+            "SELECT f.*,a.name account_name,(initial_amount-spent_amount-returned_amount) remaining_amount FROM funds f JOIN accounts a ON a.id=f.account_id WHERE f.user_id=%s ORDER BY status,created_at DESC",
+            [user["id"]],
+        )
+
+
+@app.get("/api/assets")
+def assets(user=Depends(current_user)):
+    with store.connect() as db:
+        return store.rows(
+            db,
+            "SELECT * FROM assets WHERE user_id=%s ORDER BY category,name",
+            [user["id"]],
+        )
+
+
+@app.get("/api/settings")
+def settings(user=Depends(current_user)):
+    return dict(user_name=user["name"], main_currency=user["currency"])
+
+
+@app.get("/api/audit")
+def audit(user=Depends(current_user)):
+    with store.connect() as db:
+        return store.rows(
+            db,
+            "SELECT action,resource_id,created_at FROM audit_events WHERE user_id=%s ORDER BY id DESC LIMIT 100",
+            [user["id"]],
+        )
+
+
+@app.get("/api/export")
+def export(user=Depends(current_user)):
+    with store.connect() as db:
+        result = {
+            table: store.rows(
+                db, f"SELECT * FROM {table} WHERE user_id=%s", [user["id"]]
+            )
+            for table in (
+                "accounts",
+                "transactions",
+                "loans",
+                "funds",
+                "assets",
+                "receipts",
+            )
+        }
+        return dict(
+            version=2,
+            exported_at=datetime.now(timezone.utc),
+            profile=user_view(user),
+            **result,
+        )
+
+
+@app.post("/api/accounts/{aid}/restore")
+def restore_account(aid: str, user=Depends(current_user)):
+    with store.connect() as db:
+        latest = store.one(
+            db, "SELECT active FROM users WHERE id=%s FOR UPDATE", [user["id"]]
+        )
+        if not latest["active"]:
+            raise HTTPException(401, "Compte désactivé.")
+        store.owned(db, "accounts", user["id"], aid)
+        db.execute(
+            "UPDATE accounts SET is_active=true WHERE id=%s AND user_id=%s",
+            [aid, user["id"]],
+        )
+        store.audit(db, user["id"], "accounts.restored", aid)
+    return dict(success=True)
+
+
+@app.post("/api/{path:path}")
+def mutate(path: str, data: dict, request: Request, user=Depends(current_user)):
+    handlers = {
+        "accounts": store.create_account,
+        "transactions": store.create_transaction,
+        "loans/borrowed": lambda d, u, v: store.create_loan(d, u, v, "borrowed"),
+        "loans/given": lambda d, u, v: store.create_loan(d, u, v, "given"),
+        "loans/borrowed/repay": lambda d, u, v: store.repay(d, u, v, "borrowed"),
+        "loans/given/receive": lambda d, u, v: store.repay(d, u, v, "given"),
+        "third-party": store.create_fund,
+        "third-party/refund": store.refund,
+        "third-party/spend": store.spend_fund,
+    }
+    with store.connect() as db:
+        # One lock per financial owner: atomic balances, repayments and duplicate prevention.
+        latest = store.one(
+            db, "SELECT * FROM users WHERE id=%s FOR UPDATE", [user["id"]]
+        )
+        if not latest["active"]:
+            raise HTTPException(401, "Compte désactivé.")
+        key = request.headers.get("idempotency-key")
+        if key and len(key) > 100:
+            raise HTTPException(422, "Clé d’opération invalide.")
+        fingerprint = digest(path + json.dumps(data, sort_keys=True))
+        if key:
+            previous = store.one(
+                db,
+                "SELECT * FROM idempotency WHERE user_id=%s AND key=%s",
+                [user["id"], key],
+            )
+            if previous:
+                if previous["request_hash"] != fingerprint:
+                    raise HTTPException(
+                        409, "Clé déjà utilisée pour une autre opération."
+                    )
+                return previous["response"]
+        if path in handlers:
+            result = handlers[path](db, latest, data)
+        elif path == "settings":
+            name = store.text(data.get("user_name"), 80)
+            currency = data.get("main_currency", latest["currency"])
+            if currency not in ("FCFA", "EUR", "USD"):
+                raise HTTPException(422, "Devise invalide.")
+            if currency != latest["currency"]:
+                if (
+                    store.one(
+                        db,
+                        "SELECT id FROM transactions WHERE user_id=%s LIMIT 1",
+                        [user["id"]],
+                    )
+                    or store.one(
+                        db,
+                        "SELECT id FROM loans WHERE user_id=%s LIMIT 1",
+                        [user["id"]],
+                    )
+                    or store.one(
+                        db,
+                        "SELECT id FROM assets WHERE user_id=%s LIMIT 1",
+                        [user["id"]],
+                    )
+                ):
+                    raise HTTPException(
+                        422,
+                        "La devise est verrouillée après la première opération : aucune conversion automatique.",
+                    )
+                db.execute(
+                    "UPDATE accounts SET currency=%s WHERE user_id=%s",
+                    [currency, user["id"]],
+                )
+            db.execute(
+                "UPDATE users SET name=%s,currency=%s WHERE id=%s",
+                [name, currency, user["id"]],
+            )
+            result = dict(success=True)
+        elif path == "assets":
+            category = data.get("category")
+            if category not in ("material", "real_estate", "investment", "inventory"):
+                raise HTTPException(422, "Catégorie invalide.")
+            aid = store.identifier()
+            db.execute(
+                "INSERT INTO assets(id,user_id,name,category,purchase_value,current_value,purchase_date,notes) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                [
+                    aid,
+                    user["id"],
+                    store.text(data.get("name")),
+                    category,
+                    store.money(data.get("purchase_value"), True),
+                    store.money(data.get("current_value"), True),
+                    (
+                        store.day(data["purchase_date"])
+                        if data.get("purchase_date")
+                        else None
+                    ),
+                    store.text(data.get("notes", ""), 1000, False),
+                ],
+            )
+            result = dict(success=True, id=aid)
+        else:
+            raise HTTPException(404, "Fonction introuvable.")
+        store.audit(
+            db,
+            user["id"],
+            path,
+            result.get("id") or data.get("loan_id") or data.get("fund_id"),
+        )
+        if key:
+            db.execute(
+                "INSERT INTO idempotency(user_id,key,request_hash,response) VALUES (%s,%s,%s,%s)",
+                [user["id"], key, fingerprint, Jsonb(result)],
+            )
+        return result
+
+
+@app.patch("/api/accounts/{aid}")
+def update_account(aid: str, data: dict, user=Depends(current_user)):
+    with store.connect() as db:
+        latest = store.one(
+            db, "SELECT active FROM users WHERE id=%s FOR UPDATE", [user["id"]]
+        )
+        if not latest["active"]:
+            raise HTTPException(401, "Compte désactivé.")
+        store.owned(db, "accounts", user["id"], aid, True)
+        db.execute(
+            "UPDATE accounts SET name=%s,account_number=%s WHERE id=%s AND user_id=%s",
+            [
+                store.text(data.get("name")),
+                store.text(data.get("account_number", ""), required=False),
+                aid,
+                user["id"],
+            ],
+        )
+        store.audit(db, user["id"], "accounts.updated", aid)
+    return dict(success=True)
+
+
+@app.delete("/api/assets/{aid}")
+def delete_asset(aid: str, user=Depends(current_user)):
+    with store.connect() as db:
+        db.execute("SELECT id FROM users WHERE id=%s FOR UPDATE", [user["id"]])
+        store.owned(db, "assets", user["id"], aid)
+        db.execute("DELETE FROM assets WHERE id=%s AND user_id=%s", [aid, user["id"]])
+        store.audit(db, user["id"], "assets.deleted", aid)
+    return dict(success=True)
+
+
+@app.delete("/api/accounts/{aid}")
+def archive_account(aid: str, user=Depends(current_user)):
+    with store.connect() as db:
+        db.execute("SELECT id FROM users WHERE id=%s FOR UPDATE", [user["id"]])
+        account = store.owned(db, "accounts", user["id"], aid, True)
+        if account["balance"] != 0:
+            raise HTTPException(422, "Transférez le solde avant d’archiver ce compte.")
+        db.execute(
+            "UPDATE accounts SET is_active=false WHERE id=%s AND user_id=%s",
+            [aid, user["id"]],
+        )
+        store.audit(db, user["id"], "accounts.archived", aid)
+    return dict(success=True)
+
+
+app.mount("/css", StaticFiles(directory=ROOT / "public/css"), name="css")
+app.mount("/js", StaticFiles(directory=ROOT / "public/js"), name="js")
+app.mount("/icons", StaticFiles(directory=ROOT / "public/icons"), name="icons")
+
+
+@app.get("/{path:path}")
+def frontend(path: str):
+    if path.startswith("api/"):
+        raise HTTPException(404, "Route introuvable.")
+    if path in ("sw.js", "manifest.json"):
+        return FileResponse(
+            ROOT / "public" / path, headers={"Cache-Control": "no-cache"}
+        )
+    return FileResponse(
+        ROOT / "public/index.html", headers={"Cache-Control": "no-cache"}
+    )
+
 
 if __name__ == "__main__":
-    main()
+    import uvicorn
+
+    uvicorn.run(
+        "server:app",
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "8080")),
+        proxy_headers=True,
+        forwarded_allow_ips=os.getenv("FORWARDED_ALLOW_IPS", "127.0.0.1"),
+    )
