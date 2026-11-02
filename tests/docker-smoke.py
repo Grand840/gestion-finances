@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 from pathlib import Path
 import sys
 from uuid import uuid4
@@ -42,8 +43,13 @@ def main():
             assert receipt.status_code == 200
             pdf = client.get("/api/receipt/" + state["receipt"] + "/pdf")
             assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF-")
+            assert client.get("/api/profile/signature").status_code == 200
+            assert client.get(
+                "/api/documents/" + state["document"] + "/pdf"
+            ).content.startswith(b"%PDF-")
+            assert client.get("/api/people").json()[0]["balance"] == 500
             print(
-                "OK — données, accès et reçus PDF préservés après restauration ; ancienne session révoquée."
+                "OK — données, signature, comptes dédiés et PDF préservés après restauration ; ancienne session révoquée."
             )
             return
         env = dict(
@@ -89,6 +95,40 @@ def main():
         rid = payment["receipt"]["id"]
         pdf = client.get("/api/receipt/" + rid + "/pdf")
         assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF-")
+        image = subprocess.check_output([sys.executable, "tests/signature-fixture.py"])
+        assert (
+            client.put(
+                "/api/profile/signature",
+                content=image,
+                headers={"Content-Type": "image/png"},
+            ).status_code
+            == 200
+        )
+        post(
+            client,
+            "third-party",
+            person_name="Personne fictive Docker",
+            reason="Dépôt de test",
+            amount=500,
+        )
+        borrowed = post(
+            client,
+            "loans/borrowed",
+            lender_name="Prêteur fictif Docker",
+            title="Crédit CI",
+            amount=100,
+        )
+        post(
+            client,
+            "loans/borrowed/repay",
+            loan_id=borrowed["id"],
+            amount=10,
+            notes="Acompte CI",
+        )
+        document = post(client, "documents", kind="loan", resource_id=borrowed["id"])
+        assert client.get(
+            "/api/documents/" + document["id"] + "/pdf"
+        ).content.startswith(b"%PDF-")
         invitation = post(client, "admin/invitations")["code"]
         post(client, "admin/invitations")
         with httpx.Client(base_url=client.base_url, timeout=15) as member:
@@ -109,6 +149,7 @@ def main():
                 dict(
                     account=aid,
                     receipt=rid,
+                    document=document["id"],
                     session=client.cookies.get("sillage_session"),
                 )
             )

@@ -1,5 +1,6 @@
 """PostgreSQL storage. Every financial operation runs atomically under its owner's lock."""
 
+import base64
 import hashlib
 import json
 import os
@@ -90,6 +91,7 @@ def money(value, zero=False):
 def text(value, limit=200, required=True):
     if (
         not isinstance(value, str)
+        or "\x00" in value
         or len(value.strip()) > limit
         or (required and not value.strip())
     ):
@@ -112,7 +114,15 @@ def owned(db, table, uid, resource, active=False):
             raise ValueError()
     except (ValueError, AttributeError):
         raise HTTPException(404, "Élément introuvable dans votre espace.")
-    if table not in ("accounts", "loans", "funds", "assets", "receipts"):
+    if table not in (
+        "accounts",
+        "loans",
+        "funds",
+        "assets",
+        "receipts",
+        "people",
+        "documents",
+    ):
         raise ValueError("Unknown resource")
     result = one(
         db,
@@ -181,8 +191,12 @@ def transaction(
     return tid
 
 
-def debit(db, uid, aid, amount, personal=True):
+def debit(db, uid, aid, amount, personal=True, managed=False):
     acc = owned(db, "accounts", uid, aid, True)
+    if acc["purpose"] != "personal" and not managed:
+        raise HTTPException(
+            422, "Compte dédié : utilisez la fiche du tiers ou de l’emprunt."
+        )
     if acc["balance"] < amount:
         raise HTTPException(422, "Solde insuffisant sur ce compte.")
     if personal:
@@ -207,8 +221,12 @@ def debit(db, uid, aid, amount, personal=True):
     return acc
 
 
-def credit(db, uid, aid, amount):
+def credit(db, uid, aid, amount, managed=False):
     acc = owned(db, "accounts", uid, aid, True)
+    if acc["purpose"] != "personal" and not managed:
+        raise HTTPException(
+            422, "Compte dédié : utilisez la fiche du tiers ou de l’emprunt."
+        )
     db.execute(
         "UPDATE accounts SET balance=balance+%s WHERE id=%s AND user_id=%s",
         [amount, aid, uid],
@@ -396,8 +414,15 @@ def create_loan(db, user, data, kind):
     )
     aid = data.get("account_id") if kind == "borrowed" else data.get("from_account_id")
     title = text(data.get("title"))
-    if aid:
-        (credit if kind == "borrowed" else debit)(db, uid, aid, amount)
+    if kind == "borrowed":
+        if aid:
+            raise HTTPException(
+                422, "L’emprunt est encaissé automatiquement dans son compte dédié."
+            )
+        aid = managed_account(db, user, "borrowed", f"Emprunt · {contact} · {title}")
+        credit(db, uid, aid, amount, managed=True)
+    elif aid:
+        debit(db, uid, aid, amount)
     elif kind == "given":
         raise HTTPException(422, "Compte à débiter obligatoire.")
     db.execute(
@@ -438,7 +463,11 @@ def repay(db, user, data, kind):
     if amount > loan["current_balance"]:
         raise HTTPException(422, "Le versement dépasse le solde restant dû.")
     aid = data.get("account_id") if kind == "borrowed" else data.get("to_account_id")
-    acc = (debit if kind == "borrowed" else credit)(db, uid, aid, amount)
+    if kind == "borrowed":
+        aid = fixed_account(data, "account_id", loan["account_id"])
+        acc = debit(db, uid, aid, amount, managed=True)
+    else:
+        acc = credit(db, uid, aid, amount)
     remaining, rid = loan["current_balance"] - amount, identifier()
     ordinal = one(
         db,
@@ -468,6 +497,7 @@ def repay(db, user, data, kind):
         account_name=acc["name"],
         account_type=acc["type"],
         notes=notes,
+        signature_png=signature(db, uid),
     )
     snapshot["document_hash"] = hashlib.sha256(
         json.dumps(snapshot, sort_keys=True, ensure_ascii=False).encode()
@@ -508,20 +538,40 @@ def repay(db, user, data, kind):
 def create_fund(db, user, data):
     uid, fid = user["id"], identifier()
     amount = money(data.get("amount"))
-    aid = data.get("account_id")
-    credit(db, uid, aid, amount)
-    person, reason = text(data.get("person_name")), text(data.get("reason"))
+    if data.get("account_id"):
+        raise HTTPException(
+            422,
+            "Les fonds sont encaissés automatiquement dans le compte de la personne.",
+        )
+    if data.get("person_id"):
+        person_record = owned(db, "people", uid, data["person_id"])
+        person, phone, pid, aid = (
+            person_record[k] for k in ("name", "phone", "id", "account_id")
+        )
+    else:
+        person = text(data.get("person_name"))
+        phone = text(data.get("phone", ""), 80, False)
+        # Only an explicit person_id may group deposits. Never merge homonyms silently.
+        pid = identifier()
+        aid = managed_account(db, user, "third_party", "Tiers · " + person)
+        db.execute(
+            "INSERT INTO people(id,user_id,name,phone,account_id) VALUES (%s,%s,%s,%s,%s)",
+            [pid, uid, person, phone, aid],
+        )
+    reason = text(data.get("reason"))
+    credit(db, uid, aid, amount, managed=True)
     db.execute(
-        "INSERT INTO funds(id,user_id,person_name,phone,reason,initial_amount,account_id,date_received) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+        "INSERT INTO funds(id,user_id,person_name,phone,reason,initial_amount,account_id,date_received,person_id) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
         [
             fid,
             uid,
             person,
-            text(data.get("phone", ""), 80, False),
+            phone,
             reason,
             amount,
             aid,
             day(data.get("date_received")),
+            pid,
         ],
     )
     transaction(
@@ -545,7 +595,8 @@ def refund(db, user, data):
     remaining = fund["initial_amount"] - fund["spent_amount"] - fund["returned_amount"]
     if amount > remaining:
         raise HTTPException(422, "Le montant dépasse le reliquat confié.")
-    debit(db, uid, data.get("account_id"), amount, personal=False)
+    aid = fixed_account(data, "account_id", fund["account_id"])
+    debit(db, uid, aid, amount, personal=False, managed=True)
     db.execute(
         "UPDATE funds SET returned_amount=returned_amount+%s,status=%s WHERE id=%s AND user_id=%s",
         [amount, "settled" if amount == remaining else "active", fund["id"], uid],
@@ -553,7 +604,7 @@ def refund(db, user, data):
     transaction(
         db,
         uid,
-        data["account_id"],
+        aid,
         "expense",
         amount,
         "Restitution tiers",
@@ -573,8 +624,8 @@ def spend_fund(db, user, data):
         raise HTTPException(
             422, "Le montant et les frais dépassent le reliquat confié."
         )
-    aid = data.get("account_id")
-    debit(db, uid, aid, total, personal=False)
+    aid = fixed_account(data, "account_id", fund["account_id"])
+    debit(db, uid, aid, total, personal=False, managed=True)
     db.execute(
         "UPDATE funds SET spent_amount=spent_amount+%s,status=%s WHERE id=%s AND user_id=%s",
         [total, "settled" if total == remaining else "active", fund["id"], uid],
@@ -591,4 +642,72 @@ def spend_fund(db, user, data):
         fund=fund["id"],
         when=day(data.get("date")),
     )
+    return dict(success=True, id=tid)
+
+
+def managed_account(db, user, purpose, name):
+    aid = identifier()
+    db.execute(
+        "INSERT INTO accounts(id,user_id,name,type,currency,purpose) VALUES (%s,%s,%s,'cash',%s,%s)",
+        [aid, user["id"], name, user["currency"], purpose],
+    )
+    return aid
+
+
+def fixed_account(data, field, expected):
+    if data.get(field) and data[field] != expected:
+        raise HTTPException(
+            422, "Le compte dédié est verrouillé. Aucun autre compte n’est autorisé."
+        )
+    return expected
+
+
+def signature(db, uid):
+    image = one(db, "SELECT signature_png FROM users WHERE id=%s", [uid])[
+        "signature_png"
+    ]
+    return base64.b64encode(bytes(image)).decode() if image else None
+
+
+def borrowed_cash(db, user, data):
+    loan = owned(db, "loans", user["id"], data.get("loan_id"))
+    if loan["kind"] != "borrowed":
+        raise HTTPException(422, "Cette action concerne uniquement les emprunts.")
+    amount = money(data.get("amount"))
+    note = text(data.get("description"), 1000)
+    mode = data.get("mode")
+    uid = user["id"]
+    aid = loan["account_id"]
+    if mode == "fund":
+        source = data.get("source_account_id")
+        debit(db, uid, source, amount)
+        credit(db, uid, aid, amount, managed=True)
+        tid = transaction(
+            db,
+            uid,
+            source,
+            "transfer",
+            amount,
+            "Provision remboursement",
+            note,
+            dest=aid,
+            loan=loan["id"],
+        )
+    elif mode == "spend":
+        fee = money(data.get("fee", 0), True)
+        debit(db, uid, aid, amount + fee, managed=True)
+        tid = transaction(
+            db,
+            uid,
+            aid,
+            "expense",
+            amount,
+            "Utilisation emprunt",
+            note,
+            fee,
+            loan=loan["id"],
+            when=day(data.get("date")),
+        )
+    else:
+        raise HTTPException(422, "Action attendue : fund ou spend.")
     return dict(success=True, id=tid)

@@ -1,40 +1,15 @@
 """Integration regressions against real, temporary PostgreSQL (no SQLite fallback)."""
 
 import concurrent.futures
-import os
-from pathlib import Path
 
-import pgserver
 import pytest
-from fastapi.testclient import TestClient
 from psycopg.errors import RaiseException
 
 import database as db
-from server import app
 
-SETUP = "test-only-setup-code-not-for-production"
+from conftest import SETUP
+
 PASSWORD = "Un bon mot de passe 2026!"
-
-
-@pytest.fixture(scope="session")
-def client(tmp_path_factory):
-    pg = pgserver.get_server(
-        tmp_path_factory.mktemp("pg-family"), cleanup_mode="delete"
-    )
-    os.environ["DATABASE_URL"] = pg.get_uri()
-    os.environ["SETUP_TOKEN"] = SETUP
-    try:
-        with TestClient(app) as client:
-            yield client
-    finally:
-        pg.cleanup()
-
-
-@pytest.fixture(autouse=True)
-def empty(client):
-    client.cookies.clear()
-    with db.connect() as connection:
-        connection.execute("TRUNCATE users,auth_attempts CASCADE")
 
 
 def register(client, email="admin@example.test", code=SETUP, name="Alex Mensah"):
@@ -225,23 +200,23 @@ def test_financial_operations_and_snapshot_pdf(client):
     loan2 = post(
         client,
         "loans/borrowed",
-        dict(lender_name="Banque", title="Avance", amount=50000, account_id=aid),
+        dict(lender_name="Banque", title="Avance", amount=50000),
     )
     r2 = post(
         client,
         "loans/borrowed/repay",
-        dict(loan_id=loan2["id"], account_id=aid, amount=10000),
+        dict(loan_id=loan2["id"], amount=10000),
     )["receipt"]
     assert r2["remaining_balance_after"] == "40000.00"
     fund = post(
         client,
         "third-party",
-        dict(person_name="Client", reason="Achats", amount=30000, account_id=aid),
+        dict(person_name="Client", reason="Achats", amount=30000),
     )
     post(
         client,
         "third-party/refund",
-        dict(fund_id=fund["id"], account_id=aid, amount=10000),
+        dict(fund_id=fund["id"], amount=10000),
     )
     metrics = client.get("/api/metrics").json()
     assert metrics["real_available_cash"] == 214900
@@ -400,7 +375,7 @@ def test_held_money_not_spent_and_archive(client):
     post(
         client,
         "third-party",
-        dict(person_name="Proche", reason="Dépôt", amount=10000, account_id=aid),
+        dict(person_name="Proche", reason="Dépôt", amount=10000),
     )
     assert (
         client.post(
@@ -494,7 +469,7 @@ def test_transfer_fees_do_not_consume_held_money(client):
     post(
         client,
         "third-party",
-        dict(person_name="Proche", reason="Dépôt", amount=1000, account_id=aid),
+        dict(person_name="Proche", reason="Dépôt", amount=1000),
     )
     assert (
         client.post(
@@ -538,14 +513,13 @@ def test_delegated_purchase_and_account_edit(client):
     fund = post(
         client,
         "third-party",
-        dict(person_name="Proche", reason="Achat", amount=10000, account_id=aid),
+        dict(person_name="Proche", reason="Achat", amount=10000),
     )
     post(
         client,
         "third-party/spend",
         dict(
             fund_id=fund["id"],
-            account_id=aid,
             amount=2000,
             fee=100,
             description="Ciment pour le chantier",
@@ -568,7 +542,7 @@ def test_delegated_purchase_and_account_edit(client):
         client.get("/api/accounts/" + aid).json()["account"]["name"]
         == "Banque personnelle"
     )
-    assert client.get("/api/accounts/" + aid).json()["account"]["balance"] == 8900
+    assert client.get("/api/accounts/" + aid).json()["account"]["balance"] == 1000
 
 
 def test_archived_history_and_reactivation(client):

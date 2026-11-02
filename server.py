@@ -1,5 +1,8 @@
 """Sillage family server: cookie sessions, PostgreSQL and isolated financial spaces."""
 
+import base64
+from io import BytesIO
+from PIL import Image, ImageOps, UnidentifiedImageError
 import hashlib
 import hmac
 import json
@@ -23,7 +26,8 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field, ConfigDict
 
 import database as store
-from receipts import build_pdf
+from receipts import build_pdf, build_report
+from documents import freeze
 
 ROOT = Path(__file__).parent
 PASSWORDS = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=2)
@@ -50,7 +54,7 @@ async def lifespan(app):
 
 app = FastAPI(
     title="Sillage",
-    version="2.0.0",
+    version="2.1.0",
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,
@@ -61,6 +65,7 @@ app = FastAPI(
 @app.middleware("http")
 async def security(request, call_next):
     if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        body_limit = 524288 if request.url.path == "/api/profile/signature" else 65536
         origin = request.headers.get("origin")
         if origin and (
             urlparse(origin).netloc != request.headers.get("host")
@@ -68,14 +73,14 @@ async def security(request, call_next):
         ):
             return JSONResponse({"error": "Origine de la requête refusée."}, 403)
         try:
-            if int(request.headers.get("content-length", "0")) > 65536:
+            if int(request.headers.get("content-length", "0")) > body_limit:
                 return JSONResponse({"error": "Requête trop volumineuse."}, 413)
         except ValueError:
             return JSONResponse({"error": "Requête invalide."}, 400)
         chunks, size = [], 0
         async for chunk in request.stream():
             size += len(chunk)
-            if size > 65536:
+            if size > body_limit:
                 return JSONResponse({"error": "Requête trop volumineuse."}, 413)
             chunks.append(chunk)
         request._body = b"".join(chunks)
@@ -141,7 +146,7 @@ def digest(token):
 
 def email_address(value):
     value = value.strip().lower()
-    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value):
+    if "\x00" in value or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value):
         raise HTTPException(422, "Adresse e-mail invalide.")
     return value
 
@@ -307,7 +312,7 @@ def register(data: Register, request: Request, response: Response):
             [
                 store.identifier(),
                 email,
-                data.name,
+                store.text(data.name, 80),
                 encoded,
                 "admin" if first else "member",
             ],
@@ -528,7 +533,11 @@ def account_detail(aid: str, user=Depends(current_user)):
         FROM transactions WHERE user_id=%s AND (account_id=%s OR to_account_id=%s)""",
             [aid, aid, user["id"], aid, aid],
         )
-        return dict(account=account, summary=summary)
+        return dict(
+            account=account,
+            summary=summary,
+            deletable=can_delete_account(db, user["id"], account),
+        )
 
 
 @app.get("/api/loans/{kind}")
@@ -544,14 +553,14 @@ def receipt(rid: str, user=Depends(current_user)):
     with store.connect() as db:
         return dict(
             success=True,
-            receipt=store.owned(db, "receipts", user["id"], rid)["snapshot"],
+            receipt=receipt_view(db, user["id"], rid),
         )
 
 
 @app.get("/api/receipt/{rid}/pdf")
 def receipt_pdf(rid: str, user=Depends(current_user)):
     with store.connect() as db:
-        snapshot = store.owned(db, "receipts", user["id"], rid)["snapshot"]
+        snapshot = receipt_view(db, user["id"], rid)
     return Response(
         build_pdf(snapshot),
         media_type="application/pdf",
@@ -605,6 +614,8 @@ def export(user=Depends(current_user)):
             )
             for table in (
                 "accounts",
+                "people",
+                "documents",
                 "transactions",
                 "loans",
                 "funds",
@@ -628,13 +639,184 @@ def restore_account(aid: str, user=Depends(current_user)):
         )
         if not latest["active"]:
             raise HTTPException(401, "Compte désactivé.")
-        store.owned(db, "accounts", user["id"], aid)
+        account = store.owned(db, "accounts", user["id"], aid)
+        if account["purpose"] != "personal":
+            raise HTTPException(
+                422,
+                "Un compte dédié ne peut pas être archivé ni réactivé manuellement.",
+            )
         db.execute(
             "UPDATE accounts SET is_active=true WHERE id=%s AND user_id=%s",
             [aid, user["id"]],
         )
         store.audit(db, user["id"], "accounts.restored", aid)
     return dict(success=True)
+
+
+def receipt_view(db, uid, rid):
+    snapshot = dict(store.owned(db, "receipts", uid, rid)["snapshot"])
+    if not snapshot.get("signature_png"):
+        snapshot["signature_png"] = store.signature(db, uid)
+        snapshot["signature_reissued"] = bool(snapshot["signature_png"])
+    return snapshot
+
+
+def can_delete_account(db, uid, account):
+    return (
+        account["purpose"] == "personal"
+        and account["balance"] == 0
+        and not any(
+            store.one(db, sql, [uid, account["id"]])
+            for sql in (
+                "SELECT id FROM transactions WHERE user_id=%s AND %s IN (account_id,to_account_id) LIMIT 1",
+                "SELECT id FROM loans WHERE user_id=%s AND %s IN (account_id,legacy_account_id) LIMIT 1",
+                "SELECT id FROM funds WHERE user_id=%s AND account_id=%s LIMIT 1",
+                "SELECT id FROM receipts WHERE user_id=%s AND account_id=%s LIMIT 1",
+                "SELECT id FROM people WHERE user_id=%s AND account_id=%s LIMIT 1",
+            )
+        )
+    )
+
+
+@app.post("/api/accounts/{aid}/delete")
+def purge_account(aid: str, data: dict, user=Depends(current_user)):
+    with store.connect() as db:
+        latest = store.one(
+            db, "SELECT * FROM users WHERE id=%s FOR UPDATE", [user["id"]]
+        )
+        if not latest["active"]:
+            raise HTTPException(401, "Compte désactivé.")
+        account = store.owned(db, "accounts", user["id"], aid)
+        if data.get("confirmation") != account["name"]:
+            raise HTTPException(
+                422, "Recopiez exactement le nom du compte pour confirmer."
+            )
+        if not can_delete_account(db, user["id"], account):
+            raise HTTPException(
+                409,
+                "Suppression refusée : compte dédié, solde non nul ou historique à conserver. Utilisez l’archivage à solde nul pour un compte personnel.",
+            )
+        db.execute("DELETE FROM accounts WHERE id=%s AND user_id=%s", [aid, user["id"]])
+        store.audit(db, user["id"], "accounts.deleted", aid)
+    return dict(success=True)
+
+
+@app.get("/api/profile/signature")
+def profile_signature(user=Depends(current_user)):
+    with store.connect() as db:
+        image = store.signature(db, user["id"])
+    if not image:
+        raise HTTPException(404, "Signature non configurée.")
+    return Response(base64.b64decode(image), media_type="image/png")
+
+
+@app.put("/api/profile/signature")
+async def upload_signature(request: Request, user=Depends(current_user)):
+    try:
+        image = Image.open(BytesIO(await request.body()))
+        if image.format not in ("PNG", "JPEG") or image.width * image.height > 4000000:
+            raise ValueError()
+        image.load()
+        image = ImageOps.exif_transpose(image).convert("RGBA")
+        image.info.clear()
+        image.thumbnail((900, 300))
+        stream = BytesIO()
+        image.save(stream, format="PNG", optimize=True)
+        binary = stream.getvalue()
+        if len(binary) > 131072:
+            raise ValueError()
+    except (UnidentifiedImageError, ValueError, OSError, Image.DecompressionBombError):
+        raise HTTPException(
+            422,
+            "Image PNG/JPEG requise : 512 Ko et 4 millions de pixels maximum. Une signature simple sur fond uni est recommandée.",
+        )
+    with store.connect() as db:
+        latest = store.one(
+            db, "SELECT active FROM users WHERE id=%s FOR UPDATE", [user["id"]]
+        )
+        if not latest["active"]:
+            raise HTTPException(401, "Compte désactivé.")
+        db.execute(
+            "UPDATE users SET signature_png=%s WHERE id=%s", [binary, user["id"]]
+        )
+        store.audit(db, user["id"], "signature.updated")
+    return dict(success=True)
+
+
+@app.delete("/api/profile/signature")
+def remove_signature(user=Depends(current_user)):
+    with store.connect() as db:
+        db.execute("SELECT id FROM users WHERE id=%s FOR UPDATE", [user["id"]])
+        db.execute("UPDATE users SET signature_png=NULL WHERE id=%s", [user["id"]])
+        store.audit(db, user["id"], "signature.removed")
+    return dict(success=True)
+
+
+@app.get("/api/people")
+def people(user=Depends(current_user)):
+    with store.connect() as db:
+        return store.rows(
+            db,
+            """SELECT p.*,a.balance,COALESCE(sum(f.initial_amount),0) total_received,
+          COALESCE(sum(f.spent_amount),0) total_spent,COALESCE(sum(f.returned_amount),0) total_returned,count(f.id) deposits
+          FROM people p JOIN accounts a ON a.id=p.account_id AND a.user_id=p.user_id
+          LEFT JOIN funds f ON f.person_id=p.id AND f.user_id=p.user_id WHERE p.user_id=%s
+          GROUP BY p.id,a.balance ORDER BY p.name,p.created_at""",
+            [user["id"]],
+        )
+
+
+@app.get("/api/people/{pid}")
+def person_detail(pid: str, user=Depends(current_user)):
+    with store.connect() as db:
+        return freeze(db, user, "person", pid)
+
+
+@app.post("/api/documents")
+def create_document(data: dict, user=Depends(current_user)):
+    consume_attempt("document:" + user["id"], 30)
+    with store.connect() as db:
+        latest = store.one(
+            db, "SELECT * FROM users WHERE id=%s FOR UPDATE", [user["id"]]
+        )
+        if not latest["active"]:
+            raise HTTPException(401, "Compte désactivé.")
+        snapshot = freeze(db, latest, data.get("kind"), data.get("resource_id"))
+        db.execute(
+            "INSERT INTO documents(id,user_id,kind,reference,snapshot) VALUES (%s,%s,%s,%s,%s)",
+            [
+                snapshot["id"],
+                user["id"],
+                snapshot["kind"],
+                snapshot["reference"],
+                Jsonb(snapshot),
+            ],
+        )
+        store.audit(db, user["id"], "documents.created", snapshot["id"])
+    return dict(id=snapshot["id"], reference=snapshot["reference"])
+
+
+@app.get("/api/documents")
+def list_documents(user=Depends(current_user)):
+    with store.connect() as db:
+        return store.rows(
+            db,
+            "SELECT id,kind,reference,created_at,snapshot->>'title' title,snapshot->>'subject' subject FROM documents WHERE user_id=%s ORDER BY created_at DESC LIMIT 100",
+            [user["id"]],
+        )
+
+
+@app.get("/api/documents/{did}/pdf")
+def document_pdf(did: str, user=Depends(current_user)):
+    with store.connect() as db:
+        snapshot = store.owned(db, "documents", user["id"], did)["snapshot"]
+    return Response(
+        build_report(snapshot),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{snapshot["reference"]}.pdf"'
+        },
+    )
 
 
 @app.post("/api/{path:path}")
@@ -649,6 +831,7 @@ def mutate(path: str, data: dict, request: Request, user=Depends(current_user)):
         "third-party": store.create_fund,
         "third-party/refund": store.refund,
         "third-party/spend": store.spend_fund,
+        "loans/cash": store.borrowed_cash,
     }
     with store.connect() as db:
         # One lock per financial owner: atomic balances, repayments and duplicate prevention.
@@ -758,7 +941,9 @@ def update_account(aid: str, data: dict, user=Depends(current_user)):
         )
         if not latest["active"]:
             raise HTTPException(401, "Compte désactivé.")
-        store.owned(db, "accounts", user["id"], aid, True)
+        account = store.owned(db, "accounts", user["id"], aid, True)
+        if account["purpose"] != "personal":
+            raise HTTPException(422, "Le nom du compte dédié est géré par son dossier.")
         db.execute(
             "UPDATE accounts SET name=%s,account_number=%s WHERE id=%s AND user_id=%s",
             [
@@ -787,6 +972,10 @@ def archive_account(aid: str, user=Depends(current_user)):
     with store.connect() as db:
         db.execute("SELECT id FROM users WHERE id=%s FOR UPDATE", [user["id"]])
         account = store.owned(db, "accounts", user["id"], aid, True)
+        if account["purpose"] != "personal":
+            raise HTTPException(
+                422, "Un compte dédié est conservé avec le dossier de son titulaire."
+            )
         if account["balance"] != 0:
             raise HTTPException(422, "Transférez le solde avant d’archiver ce compte.")
         db.execute(

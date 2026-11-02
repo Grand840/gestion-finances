@@ -19,7 +19,7 @@ jobs:
           node-version: "22"
           cache: npm
       - run: pip install -r requirements-dev.txt
-      - run: python -m pytest tests/test_family.py -q
+      - run: python -m pytest -q
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run test:ui
