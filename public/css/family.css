@@ -1413,3 +1413,314 @@ body.modal-open {
   color: #95a48a;
   border: 1px solid #dfe8d6;
 }
+/* Dossiers and document identity */
+.dossier-tools,
+.action-wrap {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 16px 0;
+}
+.dossier-tools .search-field {
+  flex: 1;
+  min-width: 180px;
+}
+.loan-dossier,
+.person-dossier {
+  padding: 0 !important;
+  overflow: hidden;
+  border: 1px solid #dfe7dd;
+  background: #fff;
+}
+.loan-dossier > summary,
+.person-dossier > summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  cursor: pointer;
+  padding: 24px;
+  list-style: none;
+}
+.loan-dossier > summary::-webkit-details-marker,
+.person-dossier > summary::-webkit-details-marker {
+  display: none;
+}
+.loan-dossier > summary:focus-visible,
+.person-dossier > summary:focus-visible {
+  outline: 3px solid #719c79;
+  outline-offset: -4px;
+}
+.loan-dossier h3,
+.person-dossier h3 {
+  font-size: 1.2rem;
+  margin: 5px 0;
+}
+.loan-dossier summary p,
+.person-dossier summary p {
+  color: #6d7e70;
+  margin: 0;
+  font-size: 0.86rem;
+  overflow-wrap: anywhere;
+}
+.dossier-remaining {
+  display: flex;
+  flex-direction: column;
+  text-align: right;
+  gap: 4px;
+}
+.dossier-remaining > strong {
+  font-family: var(--font-display, Georgia, serif);
+  font-size: 1.6rem;
+  color: #174f42;
+}
+.dossier-remaining > span {
+  font-size: 0.76rem;
+  color: #78867a;
+}
+.disclosure-label {
+  margin-top: 10px;
+  font-weight: 700;
+  color: #315b40 !important;
+}
+.dossier-body {
+  padding: 0 24px 24px;
+  border-top: 1px solid #edf0e8;
+}
+.dossier-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  background: #f7f8f1;
+  padding: 16px;
+  margin: 16px 0;
+  border-radius: 12px;
+}
+.dossier-stats div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dossier-stats span {
+  font-size: 0.75rem;
+  color: #71816e;
+}
+.dossier-stats strong {
+  font-size: 0.95rem;
+  overflow-wrap: anywhere;
+}
+.overdue-tag {
+  background: #fbefe7;
+  color: #9c4e2a !important;
+  padding: 4px 8px;
+  border-radius: 5px;
+}
+.dedicated-wallet {
+  padding: 16px;
+  border: 1px solid #d9e3d8;
+  border-radius: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.dedicated-wallet > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.dedicated-wallet span,
+.dedicated-wallet small {
+  font-size: 0.75rem;
+  color: #71816e;
+}
+.installment-details {
+  margin-top: 20px;
+}
+.installment-details > summary {
+  cursor: pointer;
+  font-weight: 700;
+  padding: 12px 0;
+}
+.installment-row,
+.fund-deposit,
+.document-history-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px 0;
+  border-top: 1px solid #e9eee4;
+}
+.installment-row > div,
+.fund-deposit > div:first-child,
+.document-history-row > div {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.installment-row p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.installment-row span,
+.installment-row small,
+.fund-deposit small,
+.document-history-row small {
+  color: #73826e;
+  font-size: 0.76rem;
+}
+.fund-deposit h4,
+.fund-deposit p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.migration-notice {
+  padding: 12px;
+  background: #fbf3dc;
+  border-radius: 8px;
+  color: #756132;
+  font-size: 0.82rem;
+}
+.statement-modal {
+  max-width: 1000px !important;
+}
+.statement-table-wrap {
+  overflow: auto;
+  border: 1px solid #dce6da;
+  border-radius: 9px;
+  margin: 16px 0;
+}
+.statement-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 600px;
+  font-size: 0.78rem;
+}
+.statement-table th {
+  text-align: left;
+  background: #174f42;
+  color: white;
+  padding: 12px;
+}
+.statement-table td {
+  padding: 12px;
+  border-bottom: 1px solid #e3e9df;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  max-width: 330px;
+}
+.signature-preview {
+  max-width: 260px;
+  max-height: 100px;
+  object-fit: contain;
+  background: #fff;
+  border: 1px solid #dfe6d9;
+  padding: 10px;
+  margin-bottom: 14px;
+}
+.signature-consent {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 0.82rem;
+  margin: 16px 0;
+}
+.danger-link {
+  color: #a33b36;
+  margin: 14px;
+}
+.btn-danger {
+  background: #a33b36;
+  color: white;
+  margin-top: 18px;
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.document-signatures > img.receipt-stamp {
+  width: 154px !important;
+  height: 154px !important;
+  max-width: 100%;
+}
+.document-signatures .profile-signature {
+  display: block;
+  max-width: 100%;
+  width: 145px;
+  height: 50px;
+  object-fit: contain;
+  margin: 8px 0;
+}
+.document-signatures > div:has(.profile-signature) > i {
+  margin-top: 8px !important;
+}
+.document-history-row strong {
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  .loan-dossier > summary,
+  .person-dossier > summary {
+    padding: 18px;
+    gap: 12px;
+  }
+  .dossier-remaining > strong {
+    font-size: 1.22rem;
+  }
+  .dossier-body {
+    padding: 0 16px 18px;
+  }
+  .dossier-stats {
+    grid-template-columns: 1fr;
+  }
+  .dedicated-wallet,
+  .installment-row,
+  .fund-deposit,
+  .document-history-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .dossier-tools {
+    gap: 8px;
+  }
+  .loan-dossier h3,
+  .person-dossier h3 {
+    font-size: 1rem;
+  }
+  .loan-dossier summary > div:first-child,
+  .person-dossier summary > div:first-child {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .document-signatures > img.receipt-stamp {
+    width: 120px !important;
+    height: 120px !important;
+  }
+  .document-signatures {
+    gap: 5px !important;
+  }
+  .document-signatures > div {
+    min-width: 0;
+  }
+}
+@media print {
+  .document-signatures > img.receipt-stamp {
+    width: 145px !important;
+    height: 145px !important;
+  }
+  .profile-signature {
+    print-color-adjust: exact;
+  }
+}
+.dossier-remaining {
+  min-width: 0;
+  max-width: 55%;
+}
+.dossier-remaining strong {
+  overflow-wrap: anywhere;
+}
+.account-edit-link[hidden] {
+  display: none !important;
+}

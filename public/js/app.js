@@ -37,6 +37,7 @@ const App = {
         thirdParty,
         assets,
         settings,
+        people,
       ] = await Promise.all([
         API.getMetrics(),
         API.getAccounts(),
@@ -46,6 +47,7 @@ const App = {
         API.getThirdPartyFunds(),
         API.getAssets(),
         API.getSettings(),
+        API.request("/people"),
       ]);
 
       if (epoch !== Family.epoch || serial !== this.loadSerial || !Family.user)
@@ -58,6 +60,7 @@ const App = {
       this.state.thirdParty = thirdParty;
       this.state.assets = assets;
       this.state.settings = settings;
+      Workspace.people = people;
 
       this.render();
       if (this.state.currentTab === "account-detail")
@@ -733,203 +736,12 @@ const App = {
 
   // ==================== RENDU EMPRUNTS AVEC REÇUS D'ACOMPTES ====================
   renderBorrowedLoans() {
-    const list = document.getElementById("borrowedLoansList");
-    if (this.state.borrowedLoans.length === 0) {
-      list.innerHTML = `
-        <div style="text-align: center; padding: 36px 16px; color: var(--text-muted);">
-          <div style="font-size: 2.2rem; margin-bottom: 10px;"><svg class=icon aria-hidden=true><use href=/icons/sprite.svg#bank></use></svg></div>
-          <div style="font-weight: 700; color: var(--text-dark);">Aucun emprunt en cours</div>
-          <p style="font-size: 0.8rem; margin-top: 4px; max-width: 420px; margin-inline: auto;">
-            Crédits bancaires, avances ou emprunts auprès de tiers : ils restent isolés dans ce compte dédié et ne gonflent pas votre capital personnel.
-          </p>
-        </div>
-      `;
-      return;
-    }
-
-    list.innerHTML = this.state.borrowedLoans
-      .map((loan) => {
-        const remaining = Number(loan.current_balance);
-        const isSettled = loan.status === "settled" || remaining <= 0;
-        const repaid = loan.initial_amount - remaining;
-        const pct = Math.min(
-          100,
-          Math.round((repaid / loan.initial_amount) * 100),
-        );
-        const repayments = loan.repayments || [];
-
-        return `
-        <div class="loan-card">
-          <div class="loan-card-top">
-            <div>
-              <div class="loan-card-title">
-                ${this.escapeHtml(loan.title)}
-                <span class="pill-tag" style="background-color: ${isSettled ? "var(--forest-green-bg)" : "var(--bordeaux-red-bg)"}; color: ${isSettled ? "var(--forest-green)" : "var(--bordeaux-red)"};">
-                  ${isSettled ? "Soldé" : "À rembourser"}
-                </span>
-              </div>
-              <div class="loan-card-sub">Prêteur : <strong>${this.escapeHtml(loan.lender_name)}</strong> ${loan.due_date ? "• Échéance : " + this.formatDate(loan.due_date) : ""}</div>
-            </div>
-            <div>
-              <div class="loan-card-amount" style="color: ${isSettled ? "var(--text-muted)" : "var(--bordeaux-red)"};">
-                ${this.formatMoney(remaining)}
-              </div>
-              <div style="font-size: 0.7rem; color: var(--text-muted); text-align: right;">Reste à payer</div>
-            </div>
-          </div>
-
-          <div class="progress-container">
-            <div class="progress-fill" style="width: ${pct}%; background-color: var(--bordeaux-red);"></div>
-          </div>
-
-          <div class="progress-labels">
-            <span>Montant Emprunté : ${this.formatMoney(loan.initial_amount)}</span>
-            <span>Déjà Remboursé : ${this.formatMoney(repaid)} (${pct}%)</span>
-          </div>
-
-          <!-- Historique des versements d'acomptes avec bouton reçu pour chacun -->
-          ${
-            repayments.length > 0
-              ? `
-            <div class="repayments-history-box">
-              <div style="font-size: 0.74rem; font-weight: 750; color: var(--text-dark); margin-bottom: 6px;">Historique des acomptes versés :</div>
-              ${repayments
-                .map(
-                  (r) => `
-                <div class="repayment-pill-row">
-                  <div>
-                    <strong>${this.formatInstallment(r.installment_number, r.remaining_balance_after <= 0)}</strong>
-                    <span style="color: var(--text-muted);"> • ${this.formatMoney(r.amount)} (${this.escapeHtml(r.account_name)}) • ${this.formatDate(r.date)}</span>
-                  </div>
-                  <button class="btn btn-secondary btn-sm" onclick="App.openReceiptModal('${r.id}')" style="padding: 3px 8px; font-size: 0.72rem;">
-                    <svg class=icon aria-hidden=true><use href=/icons/sprite.svg#print></use></svg> Reçu PDF
-                  </button>
-                </div>
-              `,
-                )
-                .join("")}
-            </div>
-          `
-              : ""
-          }
-
-          ${
-            !isSettled
-              ? `
-            <div style="margin-top: 14px; display: flex; justify-content: flex-end;">
-              <button class="btn btn-secondary btn-sm" onclick="App.openRepayLoanModal('${loan.id}')">
-                <svg class=icon aria-hidden=true><use href=/icons/sprite.svg#up-right></use></svg> Payer un acompte
-              </button>
-            </div>
-          `
-              : ""
-          }
-        </div>
-      `;
-      })
-      .join("");
+    Workspace.renderLoans("borrowed");
   },
-
-  // ==================== RENDU PRÊTS ACCORDÉS AVEC REÇUS D'ACOMPTES ====================
   renderGivenLoans() {
-    const list = document.getElementById("givenLoansList");
-    if (this.state.givenLoans.length === 0) {
-      list.innerHTML = `
-        <div style="text-align: center; padding: 36px 16px; color: var(--text-muted);">
-          <div style="font-size: 2.2rem; margin-bottom: 10px;"><svg class=icon aria-hidden=true><use href=/icons/sprite.svg#users></use></svg></div>
-          <div style="font-weight: 700; color: var(--text-dark);">Aucun prêt accordé en cours</div>
-          <p style="font-size: 0.8rem; margin-top: 4px; max-width: 420px; margin-inline: auto;">
-            Prêts à des collègues ou proches : l'argent est débité de votre compte pour entrer dans ce compte de créances. Vous pouvez imprimer une quittance à chaque tranche reçue.
-          </p>
-        </div>
-      `;
-      return;
-    }
-
-    list.innerHTML = this.state.givenLoans
-      .map((loan) => {
-        const remaining = Number(loan.current_balance);
-        const isSettled = loan.status === "settled" || remaining <= 0;
-        const collected = loan.initial_amount - remaining;
-        const pct = Math.min(
-          100,
-          Math.round((collected / loan.initial_amount) * 100),
-        );
-        const repayments = loan.repayments || [];
-
-        return `
-        <div class="loan-card">
-          <div class="loan-card-top">
-            <div>
-              <div class="loan-card-title">
-                ${this.escapeHtml(loan.title)}
-                <span class="pill-tag" style="background-color: ${isSettled ? "var(--forest-green-bg)" : "var(--gold-light)"}; color: ${isSettled ? "var(--forest-green)" : "var(--gold-primary)"};">
-                  ${isSettled ? "Récupéré" : "En cours"}
-                </span>
-              </div>
-              <div class="loan-card-sub">Emprunteur : <strong>${this.escapeHtml(loan.borrower_name)}</strong> ${loan.due_date ? "• Échéance : " + this.formatDate(loan.due_date) : ""}</div>
-            </div>
-            <div>
-              <div class="loan-card-amount" style="color: ${isSettled ? "var(--text-muted)" : "var(--forest-green)"};">
-                ${this.formatMoney(remaining)}
-              </div>
-              <div style="font-size: 0.7rem; color: var(--text-muted); text-align: right;">Reste à récupérer</div>
-            </div>
-          </div>
-
-          <div class="progress-container">
-            <div class="progress-fill" style="width: ${pct}%; background-color: var(--forest-green);"></div>
-          </div>
-
-          <div class="progress-labels">
-            <span>Somme Prêtée : ${this.formatMoney(loan.initial_amount)}</span>
-            <span>Déjà Encaissé : ${this.formatMoney(collected)} (${pct}%)</span>
-          </div>
-
-          <!-- Historique des tranches encaissées -->
-          ${
-            repayments.length > 0
-              ? `
-            <div class="repayments-history-box">
-              <div style="font-size: 0.74rem; font-weight: 750; color: var(--text-dark); margin-bottom: 6px;">Acomptes encaissés :</div>
-              ${repayments
-                .map(
-                  (r) => `
-                <div class="repayment-pill-row">
-                  <div>
-                    <strong>${this.formatInstallment(r.installment_number, r.remaining_balance_after <= 0)}</strong>
-                    <span style="color: var(--text-muted);"> • ${this.formatMoney(r.amount)} sur ${this.escapeHtml(r.account_name)} • ${this.formatDate(r.date)}</span>
-                  </div>
-                  <button class="btn btn-secondary btn-sm" onclick="App.openReceiptModal('${r.id}')" style="padding: 3px 8px; font-size: 0.72rem;">
-                    <svg class=icon aria-hidden=true><use href=/icons/sprite.svg#print></use></svg> Quittance PDF
-                  </button>
-                </div>
-              `,
-                )
-                .join("")}
-            </div>
-          `
-              : ""
-          }
-
-          ${
-            !isSettled
-              ? `
-            <div style="margin-top: 14px; display: flex; justify-content: flex-end;">
-              <button class="btn btn-gold btn-sm" onclick="App.openReceiveLoanModal('${loan.id}')">
-                <svg class=icon aria-hidden=true><use href=/icons/sprite.svg#wallet></use></svg> Encaisser un acompte
-              </button>
-            </div>
-          `
-              : ""
-          }
-        </div>
-      `;
-      })
-      .join("");
+    Workspace.renderLoans("given");
   },
 
-  // ==================== REÇU FINANCIER & IMPRESSION PDF ====================
   async openReceiptModal(repaymentId) {
     try {
       const res = await API.getReceipt(repaymentId);
@@ -952,7 +764,7 @@ const App = {
         (acc) => `
       <div class="account-tile" role="button" tabindex="0" data-account-id="${acc.id}" aria-label="Ouvrir ${this.escapeHtml(acc.name)}" style="margin-bottom: 12px;">
         <div class="account-tile-header">
-          <span class="pill-tag" style="background-color: var(--bg-subtle); color: var(--text-medium);">${{ momo: "Mobile Money", cash: "Espèces", bank: "Banque" }[acc.type] || "Compte"}</span>
+          <span class="pill-tag" style="background-color: var(--bg-subtle); color: var(--text-medium);">${acc.purpose === "third_party" ? "Compte de tiers · verrouillé" : acc.purpose === "borrowed" ? "Compte emprunt · verrouillé" : { momo: "Mobile Money", cash: "Espèces", bank: "Banque" }[acc.type] || "Compte"}</span>
           <span style="font-size: 1.25rem;">${acc.type === "momo" ? "<svg class=icon aria-hidden=true><use href=/icons/sprite.svg#phone></use></svg>" : acc.type === "cash" ? "<svg class=icon aria-hidden=true><use href=/icons/sprite.svg#cash></use></svg>" : "<svg class=icon aria-hidden=true><use href=/icons/sprite.svg#bank></use></svg>"}</span>
         </div>
         <div class="account-tile-name">${this.escapeHtml(acc.name)} ${acc.account_number ? "• " + this.escapeHtml(acc.account_number) : ""}</div>
@@ -965,80 +777,9 @@ const App = {
 
   // ==================== RENDU TIERS ====================
   renderThirdParty() {
-    const list = document.getElementById("thirdPartyList");
-    if (this.state.thirdParty.length === 0) {
-      list.innerHTML = `
-        <div style="text-align: center; padding: 36px 16px; color: var(--text-muted);">
-          <div style="font-size: 2.2rem; margin-bottom: 10px;"><svg class=icon aria-hidden=true><use href=/icons/sprite.svg#box></use></svg></div>
-          <div style="font-weight: 700; color: var(--text-dark);">Aucun argent de tiers sous garde</div>
-          <p style="font-size: 0.8rem; margin-top: 4px; max-width: 400px; margin-inline: auto;">
-            Quand un proche ou client vous confie de l'argent pour des courses ou un chantier, enregistrez-le ici. Il reste strictement déduit de votre disponible réel.
-          </p>
-        </div>
-      `;
-      return;
-    }
-
-    list.innerHTML = this.state.thirdParty
-      .map((item) => {
-        const remaining = Number(item.remaining_amount);
-        const isSettled = item.status === "settled" || remaining <= 0;
-        const pct = Math.min(
-          100,
-          Math.round(
-            ((item.spent_amount + item.returned_amount) / item.initial_amount) *
-              100,
-          ),
-        );
-
-        return `
-        <div class="loan-card">
-          <div class="loan-card-top">
-            <div>
-              <div class="loan-card-title">
-                ${this.escapeHtml(item.person_name)}
-                <span class="pill-tag" style="background-color: ${isSettled ? "var(--forest-green-bg)" : "var(--terracotta-bg)"}; color: ${isSettled ? "var(--forest-green)" : "var(--terracotta)"};">
-                  ${isSettled ? "Soldé" : "Séquestre"}
-                </span>
-              </div>
-              <div class="loan-card-sub">${this.escapeHtml(item.reason)} • Reçu le ${this.formatDate(item.date_received)}</div>
-            </div>
-            <div>
-              <div class="loan-card-amount" style="color: ${isSettled ? "var(--text-muted)" : "var(--terracotta)"};">
-                ${this.formatMoney(remaining)}
-              </div>
-              <div style="font-size: 0.7rem; color: var(--text-muted); text-align: right;">Restant sous garde</div>
-            </div>
-          </div>
-
-          <div class="progress-container">
-            <div class="progress-fill" style="width: ${pct}%; background-color: var(--terracotta);"></div>
-          </div>
-
-          <div class="progress-labels">
-            <span>Dépôt Reçu : ${this.formatMoney(item.initial_amount)} (sur ${this.escapeHtml(item.account_name)})</span>
-            <span>Dépensé : ${this.formatMoney(item.spent_amount)}</span>
-          </div>
-
-          ${
-            !isSettled
-              ? `
-            <div style="margin-top: 14px; display: flex; justify-content: flex-end;">
-              <button class="btn btn-secondary btn-sm" style="margin-right:8px" onclick="Family.spendFund('${item.id}')">Enregistrer un achat</button>
-              <button class="btn btn-secondary btn-sm" onclick="App.openRefundModal('${item.id}')">
-                Restituer le reliquat
-              </button>
-            </div>
-          `
-              : ""
-          }
-        </div>
-      `;
-      })
-      .join("");
+    Workspace.renderPeople();
   },
 
-  // ==================== RENDU ACTIFS ====================
   renderAssets() {
     const list = document.getElementById("assetsList");
     if (this.state.assets.length === 0) {
@@ -1093,20 +834,7 @@ const App = {
     const modal = document.getElementById(modalId);
     if (!modal) return;
 
-    const accountSelects = modal.querySelectorAll(".account-select");
-    accountSelects.forEach((select) => {
-      select.innerHTML =
-        (select.id === "lbAccount"
-          ? '<option value="">Aucun versement sur un compte</option>'
-          : "") +
-        this.state.accounts
-          .map(
-            (acc) => `
-        <option value="${acc.id}">${this.escapeHtml(acc.name)} (${this.formatMoney(acc.balance, acc.currency)})</option>
-      `,
-          )
-          .join("");
-    });
+    Workspace.prepareModal(modalId, modal);
 
     const dateInputs = modal.querySelectorAll('input[type="date"]');
     const now = new Date();
@@ -1254,7 +982,6 @@ const App = {
         lender_name: lenderName,
         title,
         amount,
-        account_id: accountId || null,
         due_date: dueDate,
         notes,
       });
@@ -1393,11 +1120,11 @@ const App = {
 
     try {
       await API.createThirdPartyFund({
+        person_id: document.getElementById("tpfPersonId").value || null,
         person_name: personName,
         phone,
         reason,
         amount,
-        account_id: accountId,
         date_received: dateReceived,
       });
 

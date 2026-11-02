@@ -2,6 +2,43 @@
 
 **Vos finances, en clair.** Une application web familiale en français, auto-hébergée : chaque membre possède son propre espace financier. Version 2 : authentification serveur, PostgreSQL, reçus PDF et Docker Compose.
 
+## Nouveautés 2.1 — dossiers, comptes dédiés et documents
+
+- **Suppression confirmée d’un compte personnel** : recopier son nom. La suppression définitive n’est autorisée qu’à solde nul, sans mouvement ni lien financier. Sinon, conserver le journal et utiliser l’archivage à solde nul. Les comptes dédiés ne se suppriment pas manuellement.
+- **Prêts et emprunts repliables** : résumé par dossier/personne, recherche, tout déplier/replier, historique détaillé des acomptes, motifs, échéance et alerte visuelle en cas de retard. Les dossiers soldés restent consultables.
+- **Rapport complet de prêt ou d’emprunt** : capital initial, parties, motifs, dates, échéance, chaque acompte, référence du reçu, cumul remboursé et restant dû. Pour les emprunts : mise à disposition, achats/frais et provisions sont distingués des remboursements.
+- **Fonds de tiers par personne** : plusieurs dépôts dans le même compte dédié, achats avec frais, restitutions, historique chronologique avec solde progressif et relevé PDF exhaustif. Sélectionner une personne existante pour un nouveau dépôt ; « Nouvelle personne » crée une identité distincte, même en cas d’homonymie.
+- **Comptes dédiés verrouillés** : les fonds de tiers sont encaissés uniquement dans le compartiment de la personne ; chaque nouvel emprunt dans son compte emprunt. Pas de choix d’un compte personnel à l’encaissement. Achats/restitutions/acompte d’emprunt débitent obligatoirement le compte dédié, y compris côté API. Les opérations personnelles et virements ordinaires ne peuvent pas utiliser ces comptes.
+- **Vie du compte emprunt** : tracer une utilisation des fonds ou alimenter le compte depuis un compte personnel pour préparer un remboursement. Une provision n’est pas un remboursement et ne réduit pas la dette. Le solde de caisse et le restant dû sont affichés séparément.
+- **Relevé complet d’un compte** depuis sa fiche ; chaque rapport/relevé émis est figé, privé et disponible dans **Paramètres → Documents émis** (100 derniers ; tous dans l’export personnel).
+
+Ces comptes dédiés sont des **compartiments de gestion internes** : ils ne créent pas de véritables comptes bancaires et ne constituent pas un rapprochement automatique avec une banque.
+
+### Importer la signature
+
+Dans **Paramètres → Signature des documents**, importer sa propre image PNG/JPEG et confirmer l’autorisation d’en insérer une copie. Limites : 512 Ko, 4 millions de pixels ; normalisation PNG, orientation respectée, métadonnées supprimées, dimension maximale 900 × 300. L’image reste en PostgreSQL, n’est jamais publiée dans les ressources statiques et fait partie des sauvegardes.
+
+Les nouveaux reçus signés et rapports/relevés conservent la copie de signature à leur émission. Un changement ou retrait du profil ne modifie pas ces documents. Pour un reçu sans signature à l’origine, la signature actuelle peut être appliquée à la réédition : c’est indiqué explicitement et elle reste hors de l’empreinte du reçu original. Les anciens rapports figés ne sont pas réécrits : émettre un nouveau rapport depuis le dossier pour utiliser la nouvelle signature.
+
+Le cachet vectoriel est agrandi et sa légende dépend du document : quittance de prêt, reçu d’emprunt, rapport d’engagement, relevé de tiers ou relevé de compte. Une signature importée est une **copie de profil**, pas la signature d’une autre partie ni une signature électronique certifiée. Aucune signature réelle ou fictive n’est installée par défaut ; les images « SPECIMEN » des tests ne sont utilisées que dans des bases éphémères.
+
+### Mise à jour depuis la version familiale 2.0
+
+**Ne réinitialisez pas votre volume. Sauvegardez avant la mise à jour.**
+
+```bash
+./scripts/backup.sh
+docker compose up -d --build
+```
+
+La migration `003_documents_wallets.sql` conserve les opérations et les reçus existants :
+
+1. Les anciens dépôts de tiers portant exactement le même nom et téléphone sont regroupés. Leur reliquat est reclassé vers le compte dédié par des virements explicites « Reclassement tiers », sans changer le total de liquidités. Si les liquidités sont insuffisantes, la migration échoue entièrement et n’applique aucune modification partielle : vérifier les soldes avant de recommencer, sans effacer les données.
+2. Les anciens emprunts reçoivent un compte dédié **à zéro**, sans encaisser leur capital une seconde fois. Les soldes des comptes personnels et la dette existante sont conservés (hors reclassement tiers). Un avis apparaît dans le dossier : utiliser « Alimenter pour rembourser » avant les futurs acomptes si nécessaire. Les anciens mouvements et leurs comptes d’origine restent traçables.
+3. Les futures opérations suivent exclusivement les nouveaux comptes verrouillés. Les anciens clients API envoyant un compte personnel pour un dépôt de tiers ou un nouvel emprunt sont refusés : mettre à jour l’interface en même temps que le serveur.
+
+La CI vérifie aussi une migration avec données 2.0, la génération de PDF longs, la confidentialité de la signature et la sauvegarde/restauration Docker. Cela ne remplace pas une sauvegarde et une restauration de contrôle sur votre installation.
+
 ## Démarrage local avec Docker
 
 Prérequis : **Docker Engine + Docker Compose v2**, Python 3 pour générer les secrets.
@@ -117,7 +154,7 @@ Le code affiché est un secret personnel : ne le copiez pas dans les logs partag
 ./scripts/restore.sh backups/sillage-AAAAMMJJ-HHMMSS.dump
 ```
 
-La restauration demande confirmation, arrête l’application, remplace les objets dans une transaction, invalide les sessions et les codes en attente, puis redémarre l’application. **Testez une restauration sur une instance distincte avant de compter sur vos sauvegardes.** Une sauvegarde contient les informations financières et les empreintes de mots de passe : chiffrez-la et copiez-la sur un autre support avec accès restreint. Le volume Docker seul n’est pas une sauvegarde. L’export JSON personnel est consultable mais aucun import JSON n’est fourni.
+La restauration demande confirmation, arrête l’application, remplace les objets dans une transaction, invalide les sessions et les codes en attente, puis redémarre l’application. **Testez une restauration sur une instance distincte avant de compter sur vos sauvegardes.** Une sauvegarde contient les informations financières, les copies de signatures, les documents et les empreintes de mots de passe : chiffrez-la et copiez-la sur un autre support avec accès restreint. Le volume Docker seul n’est pas une sauvegarde. L’export JSON personnel est consultable mais aucun import JSON n’est fourni.
 
 Pour mettre à jour : sauvegardez, récupérez le code, puis `docker compose up -d --build`. Conservez `.env`. Ne lancez pas `docker compose down -v` sur des données à conserver : cela supprime les volumes.
 
@@ -129,13 +166,13 @@ Production : Python 3.12, FastAPI, psycopg 3, PostgreSQL 17 et JavaScript natif 
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements-dev.txt
-python -m pytest tests/test_family.py -q
+python -m pytest -q
 npm ci
 npx playwright install chromium
 PYTHON=.venv/bin/python npm run test:ui
 ```
 
-Les tests utilisent de vrais serveurs PostgreSQL temporaires via `pgserver`, et **ne touchent jamais aux données de votre installation**. La CI GitHub construit et démarre aussi les conteneurs, vérifie les écritures/PDF avec le rôle SQL applicatif, puis sauvegarde et restaure la base éphémère. Ces contrôles ne remplacent pas une restauration vérifiée sur votre propre serveur. Le navigateur vérifie l’isolation entre membres, les écritures, les prêts, les reçus PDF, le détail des comptes, les invitations, la récupération d’accès et cinq tailles d’écran. `BROWSER_EXECUTABLE_PATH` et `BROWSER_ARGS` permettent d’utiliser un navigateur existant.
+Les tests utilisent de vrais serveurs PostgreSQL temporaires via `pgserver`, et **ne touchent jamais aux données de votre installation**. La CI GitHub construit et démarre aussi les conteneurs, vérifie les écritures/PDF avec le rôle SQL applicatif, puis sauvegarde et restaure la base éphémère. Ces contrôles ne remplacent pas une restauration vérifiée sur votre propre serveur. Le navigateur vérifie aussi les suppressions confirmées, dossiers repliables, import de signature, rapports/relevés, comptes verrouillés et cinq tailles d’écran, en plus de l’authentification et de l’isolation entre membres. `BROWSER_EXECUTABLE_PATH` et `BROWSER_ARGS` permettent d’utiliser un navigateur existant.
 
 Pour un aperçu local de développement sans Docker, après avoir installé les dépendances de développement et généré `.env` : `python scripts/local-preview.py`. Cette commande utilise un PostgreSQL local sous `.local/`, distinct du volume Docker ; elle n’est pas une méthode de déploiement de production.
 

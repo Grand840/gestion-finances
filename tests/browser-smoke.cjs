@@ -1,7 +1,7 @@
 /** End-to-end family flows on temporary PostgreSQL, never the user's database. */
 const { chromium } = require("playwright");
 const assert = require("node:assert/strict");
-const { spawn } = require("node:child_process");
+const { spawn, execFileSync } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 (async () => {
@@ -109,6 +109,11 @@ const fs = require("node:fs/promises");
         form,
       );
     }
+    async function expandPeople() {
+      const card = page.locator("#thirdPartyList > details").first();
+      if (!(await card.evaluate((el) => el.open)))
+        await card.locator(":scope > summary").click();
+    }
     async function open(id) {
       await page.evaluate((id) => App.openModal(id), id);
     }
@@ -166,6 +171,7 @@ const fs = require("node:fs/promises");
     });
     await submit("loanGivenForm", "/api/loans/given");
     await page.evaluate(() => App.switchTab("loans-given"));
+    await page.locator("#givenLoansList > details > summary").click();
     await page.getByRole("button", { name: "Encaisser un acompte" }).click();
     await fill({ recvAmount: 5000 });
     await submit("receiveLoanForm", "/api/loans/given/receive");
@@ -174,9 +180,9 @@ const fs = require("node:fs/promises");
       await page.locator(".document-amounts").textContent(),
       /20\s*000/,
     );
-    assert.equal(
-      await page.locator(".document-signatures img").getAttribute("src"),
-      "/icons/stamp.svg",
+    assert.match(
+      await page.locator(".receipt-stamp").getAttribute("src"),
+      /^data:image\/svg/,
     );
     const receiptId = (
       await page.locator(".document-actions a[download]").getAttribute("href")
@@ -203,9 +209,10 @@ const fs = require("node:fs/promises");
     await page.keyboard.press("Escape");
     await open("loanBorrowedModal");
     await fill({ lbLender: "Banque", lbTitle: "Avance", lbAmount: 50000 });
-    await page.locator("#lbAccount").selectOption(aid);
+    assert.equal(await page.locator("#lbAccount").isDisabled(), true);
     await submit("loanBorrowedForm", "/api/loans/borrowed");
     await page.evaluate(() => App.switchTab("loans-borrowed"));
+    await page.locator("#borrowedLoansList > details > summary").click();
     await page.getByRole("button", { name: /Payer un acompte/ }).click();
     await fill({ repayAmount: 10000 });
     await submit("repayLoanForm", "/api/loans/borrowed/repay");
@@ -215,6 +222,7 @@ const fs = require("node:fs/promises");
     await fill({ tpfPerson: "Proche", tpfReason: "Achats", tpfAmount: 30000 });
     await submit("thirdPartyForm", "/api/third-party");
     await page.evaluate(() => App.switchTab("thirdparty"));
+    await page.locator("#thirdPartyList > details > summary").click();
     await page.getByRole("button", { name: "Restituer le reliquat" }).click();
     await fill({ refAmount: 10000 });
     await submit("refundForm", "/api/third-party/refund");
@@ -259,7 +267,7 @@ const fs = require("node:fs/promises");
         "dashboard overflow " + width,
       );
     }
-    await page.evaluate(() => Family.openAccount(App.state.accounts[0].id));
+    await page.evaluate((id) => Family.openAccount(id), aid);
     for (const width of [320, 390, 768, 1024, 1440]) {
       await page.setViewportSize({ width, height: 900 });
       assert.equal(
@@ -336,7 +344,7 @@ const fs = require("node:fs/promises");
     await page.context().setOffline(false);
     await page.evaluate(() => App.loadInitialData());
     assert.equal(await page.locator("#loadError").isVisible(), false);
-    await page.evaluate(() => Family.openAccount(App.state.accounts[0].id));
+    await page.evaluate((id) => Family.openAccount(id), aid);
     await page
       .getByRole("button", { name: "Modifier le nom / numéro" })
       .click();
@@ -350,6 +358,7 @@ const fs = require("node:fs/promises");
       "Ma banque personnelle",
     );
     await page.evaluate(() => App.switchTab("thirdparty"));
+    await expandPeople();
     await page.getByRole("button", { name: "Enregistrer un achat" }).click();
     await fill({
       spendFundAmount: 2000,
@@ -369,6 +378,168 @@ const fs = require("node:fs/promises");
     });
     await submit("assetForm", "/api/assets");
     assert.equal(await page.evaluate(() => App.state.assets.length), 1);
+    // New document identity and dossier workflows.
+    await page.evaluate(() => App.switchTab("settings"));
+    const signature = execFileSync(
+      process.env.PYTHON || "python3",
+      ["tests/signature-fixture.py"],
+      { cwd: root },
+    );
+    await page.locator("#signatureFile").setInputFiles({
+      name: "signature-test.png",
+      mimeType: "image/png",
+      buffer: signature,
+    });
+    await page.locator("#signatureForm input[type=checkbox]").check();
+    const upload = page.waitForResponse(
+      (r) =>
+        r.url().endsWith("/api/profile/signature") &&
+        r.request().method() === "PUT",
+    );
+    await page.locator("#signatureForm [type=submit]").click();
+    assert.equal((await upload).status(), 200);
+    await page.waitForFunction(
+      () =>
+        !document.getElementById("signaturePreview").hidden &&
+        document.getElementById("signaturePreview").naturalWidth > 0,
+    );
+    await page.evaluate(() => App.switchTab("loans-borrowed"));
+    await page
+      .getByRole("button", { name: "Tout replier", exact: true })
+      .click();
+    assert.equal(
+      await page.locator("#borrowedLoansList > details").getAttribute("open"),
+      null,
+    );
+    await page
+      .getByRole("button", { name: "Tout déplier", exact: true })
+      .click();
+    await page.getByRole("button", { name: "Tracer une utilisation" }).click();
+    await fill({
+      loanCashAmount: 100,
+      loanCashFee: 10,
+      loanCashReason: "Fournitures pour le projet",
+    });
+    await submit("loanCashForm", "/api/loans/cash");
+    await page
+      .getByRole("button", { name: "Alimenter pour rembourser" })
+      .click();
+    await fill({
+      loanCashAmount: 100,
+      loanCashReason: "Provision pour la prochaine échéance",
+    });
+    await submit("loanCashForm", "/api/loans/cash");
+    await page
+      .getByRole("button", { name: "Payer un acompte", exact: true })
+      .click();
+    await fill({
+      repayAmount: 50,
+      repayNotes: "Acompte après import de signature",
+    });
+    await submit("repayLoanForm", "/api/loans/borrowed/repay");
+    await page.waitForSelector("#receiptModal.active .profile-signature");
+    assert.match(
+      await page.locator(".profile-signature").getAttribute("src"),
+      /^data:image\/png/,
+    );
+    const signedDownload = page.waitForEvent("download");
+    await page.getByRole("link", { name: "Télécharger le PDF" }).click();
+    const signedFile = await signedDownload;
+    if (screenshots)
+      await fs.copyFile(
+        await signedFile.path(),
+        path.join(root, "test-results/signed-receipt.pdf"),
+      );
+    await page.keyboard.press("Escape");
+    const reportDownload = page.waitForEvent("download");
+    await page.getByRole("button", { name: "Rapport détaillé PDF" }).click();
+    const reportFile = await reportDownload;
+    assert.match(reportFile.suggestedFilename(), /^SD-.*\.pdf$/);
+    const reportPath = await reportFile.path();
+    assert(
+      (await fs.readFile(reportPath))
+        .subarray(0, 5)
+        .equals(Buffer.from("%PDF-")),
+    );
+    if (screenshots) {
+      await fs.copyFile(
+        reportPath,
+        path.join(root, "test-results/loan-report.pdf"),
+      );
+      await page.screenshot({
+        path: path.join(root, "test-results/dossiers.png"),
+        fullPage: true,
+      });
+    }
+    await page.evaluate(() => App.switchTab("thirdparty"));
+    const personId = await page.evaluate(() => Workspace.people[0].id);
+    await page.evaluate((id) => Workspace.deposit(id), personId);
+    assert.equal(await page.locator("#tpfAccount").isDisabled(), true);
+    assert.equal(await page.locator("#tpfPerson").isDisabled(), true);
+    await fill({
+      tpfReason: "Deuxième dépôt de la même personne",
+      tpfAmount: 500,
+    });
+    await submit("thirdPartyForm", "/api/third-party");
+    assert.equal(await page.evaluate(() => Workspace.people.length), 1);
+    await expandPeople();
+    await page
+      .getByRole("button", { name: "Consulter les mouvements" })
+      .click();
+    await page.waitForSelector("#personLedgerModal.active");
+    assert.match(
+      await page.locator("#personLedgerContent").textContent(),
+      /Achat pour le proche/,
+    );
+    const statementDownload = page.waitForEvent("download");
+    await page
+      .getByRole("button", { name: "Télécharger le relevé PDF", exact: true })
+      .click();
+    const statement = await statementDownload;
+    if (screenshots)
+      await fs.copyFile(
+        await statement.path(),
+        path.join(root, "test-results/person-statement.pdf"),
+      );
+    await page.keyboard.press("Escape");
+    const unused = await page.evaluate(
+      () =>
+        App.state.accounts.find(
+          (a) => a.purpose === "personal" && Number(a.balance) === 0,
+        ).id,
+    );
+    await page.evaluate((id) => Family.openAccount(id), unused);
+    const unusedName = await page.locator("#detailAccountName").textContent();
+    await page
+      .getByRole("button", { name: "Supprimer définitivement ce compte" })
+      .click();
+    await fill({ deleteConfirmation: unusedName });
+    await submit("deleteAccountForm", "/api/accounts/" + unused + "/delete");
+    assert.equal(
+      await page.evaluate(
+        (id) => App.state.accounts.some((a) => a.id === id),
+        unused,
+      ),
+      false,
+    );
+    for (const width of [320, 390, 768, 1024, 1440]) {
+      await page.setViewportSize({ width, height: 1000 });
+      for (const tab of [
+        "loans-borrowed",
+        "loans-given",
+        "thirdparty",
+        "settings",
+      ]) {
+        await page.evaluate((tab) => App.switchTab(tab), tab);
+        assert.equal(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth > innerWidth,
+          ),
+          false,
+          "dossier overflow " + width + " " + tab,
+        );
+      }
+    }
     await page.evaluate(() => App.switchTab("admin"));
     await page.getByRole("button", { name: "Récupérer l’accès" }).click();
     await page.waitForFunction(
@@ -377,6 +548,13 @@ const fs = require("node:fs/promises");
     const recovery = await page.locator("#invitationCode").textContent();
     await page.locator(".logout-button").click();
     await page.waitForFunction(() => !Family.user);
+    assert.equal(await page.locator("#tpfPersonId option").count(), 1);
+    assert.equal(await page.locator("#loanCashSource option").count(), 0);
+    assert.equal(
+      await page.locator("#signaturePreview").getAttribute("src"),
+      null,
+    );
+    assert.equal(await page.locator("#documentHistory").textContent(), "");
     await page
       .getByRole("button", { name: "Réinitialiser avec un code" })
       .click();
@@ -401,7 +579,7 @@ const fs = require("node:fs/promises");
     assert.equal(await page.evaluate(() => App.state.transactions.length), 0);
     assert.deepEqual(errors, []);
     console.log(
-      "OK — inscription, connexion, déconnexion, isolation, opérations, détail de compte, prêts, remboursements, PDF, invitations, changement de mot de passe et 5 formats d’écran.",
+      "OK — inscription, connexion, déconnexion, isolation, opérations, détail de compte, prêts, remboursements, PDF, invitations, changement de mot de passe, suppression, signature privée, dossiers repliables, relevés de tiers, rapports PDF et 5 formats d’écran.",
     );
   } finally {
     await browser?.close();

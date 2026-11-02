@@ -1,10 +1,12 @@
 """Private, reproducible PDF receipts from immutable repayment snapshots."""
 
+import base64
 from io import BytesIO
 from pathlib import Path
 from decimal import Decimal
 from xml.sax.saxutils import escape
 
+from reportlab.lib.utils import ImageReader
 from reportlab import rl_config
 from reportlab.lib import colors
 from reportlab.lib.styles import ParagraphStyle
@@ -55,34 +57,80 @@ def para(value, size=10, color="#263f34", bold=False, align=0):
 
 
 class Stamp(Flowable):
-    width = 115
-    height = 115
+    """Larger vector seal, with a document-specific legend, never an official seal."""
 
-    def __init__(self, date):
+    def __init__(self, date, label="REÇU DE REMBOURSEMENT"):
         super().__init__()
-        self.width = self.height = 115
-        self.date = date
+        self.width = self.height = 140
+        self.date, self.label = date, label
 
     def draw(self):
         c = self.canv
         c.saveState()
-        c.translate(57, 57)
-        c.rotate(-10)
+        c.translate(70, 70)
+        c.rotate(-7)
         c.setStrokeColor(GREEN)
         c.setFillColor(GREEN)
-        c.setLineWidth(1.4)
-        c.circle(0, 0, 49)
-        c.setLineWidth(0.45)
-        c.circle(0, 0, 44)
-        c.setFont("Sillage-Bold", 11)
-        c.drawCentredString(0, 18, "SILLAGE")
-        c.setFont("Sillage", 7)
-        c.drawCentredString(0, 3, "VERSEMENT ENREGISTRÉ")
-        c.setFont("Sillage-Bold", 9)
-        c.drawCentredString(0, -12, self.date)
+        c.setLineWidth(1.7)
+        c.circle(0, 0, 62)
+        c.setLineWidth(0.5)
+        c.circle(0, 0, 56)
+        c.setFont("Sillage-Bold", 14)
+        c.drawCentredString(0, 24, "SILLAGE")
+        c.setLineWidth(0.6)
+        c.line(-37, 15, 37, 15)
+        words = self.label.split()
+        lines = []
+        line = ""
+        for word in words:
+            if len(line + " " + word) > 20:
+                lines.append(line)
+                line = word
+            else:
+                line = (line + " " + word).strip()
+        lines.append(line)
+        c.setFont("Sillage-Bold", 7)
+        for i, line in enumerate(lines):
+            c.drawCentredString(0, 2 - i * 11, line)
+        c.setFont("Sillage", 8)
+        c.drawCentredString(0, -28, self.date)
         c.setFont("Sillage", 6)
-        c.drawCentredString(0, -27, "CACHET APPLICATIF")
+        c.drawCentredString(0, -40, "CACHET APPLICATIF")
+        c.setFont("Sillage", 5.5)
+        c.drawCentredString(0, -50, "NON OFFICIEL")
         c.restoreState()
+
+
+class SignatureBox(Flowable):
+    def __init__(self, data, width, height):
+        super().__init__()
+        self.data = data
+        self.width = width
+        self.height = height
+
+    def draw(self):
+        if self.data:
+            image = ImageReader(BytesIO(base64.b64decode(self.data)))
+            w, h = image.getSize()
+            scale = min(self.width / w, self.height / h)
+            self.canv.drawImage(
+                image,
+                0,
+                (self.height - h * scale) / 2,
+                width=w * scale,
+                height=h * scale,
+                mask="auto",
+            )
+        else:
+            self.canv.saveState()
+            self.canv.setFont("Sillage", 7)
+            self.canv.setFillColor(MUTED)
+            self.canv.drawString(0, self.height / 2, "Signature non configurée")
+            self.canv.restoreState()
+
+
+def signature_image(data, width=120, height=40):
+    return SignatureBox(data, width, height)
 
 
 def build_pdf(r):
@@ -227,21 +275,45 @@ def build_pdf(r):
             para(r["notes"], 9),
             Spacer(1, 14),
         ]
+    if r.get("signature_reissued"):
+        story += [
+            para(
+                "Ancien reçu : signature de profil actuelle appliquée à cette réédition.",
+                7,
+                "#74867e",
+            ),
+            Spacer(1, 6),
+        ]
     signatures = table(
         [
             [
                 [
                     para("Signature de la partie versante", 8, "#74867e"),
-                    Spacer(1, 35),
+                    (
+                        signature_image(r.get("signature_png"))
+                        if r["loan_type"] == "borrowed"
+                        else Spacer(1, 40)
+                    ),
                     HRFlowable(
                         width="100%", thickness=0.5, color=colors.HexColor("#cbd9c9")
                     ),
                     para("Lu et approuvé", 7, "#74867e"),
                 ],
-                Stamp(r["date"]),
+                Stamp(
+                    r["date"],
+                    (
+                        "QUITTANCE DE PRÊT"
+                        if r["loan_type"] == "given"
+                        else "REÇU D’EMPRUNT"
+                    ),
+                ),
                 [
                     para("Signature du bénéficiaire", 8, "#74867e"),
-                    Spacer(1, 35),
+                    (
+                        signature_image(r.get("signature_png"))
+                        if r["loan_type"] == "given"
+                        else Spacer(1, 40)
+                    ),
                     HRFlowable(
                         width="100%", thickness=0.5, color=colors.HexColor("#cbd9c9")
                     ),
@@ -249,7 +321,7 @@ def build_pdf(r):
                 ],
             ]
         ],
-        [width * 0.33, width * 0.34, width * 0.33],
+        [width * 0.32, width * 0.36, width * 0.32],
     )
     story += [
         KeepTogether(
@@ -257,7 +329,7 @@ def build_pdf(r):
                 signatures,
                 Spacer(1, 8),
                 para(
-                    "Le cachet Sillage atteste uniquement l’enregistrement dans l’application. Ce document ne vaut ni certification bancaire ni signature des parties.",
+                    "Le cachet Sillage atteste uniquement l’enregistrement dans l’application. La signature importée est une copie de profil, non une signature électronique certifiée. Les autres parties signent elles-mêmes.",
                     7,
                     "#74867e",
                 ),
@@ -280,6 +352,219 @@ def build_pdf(r):
             "Sillage · Exemplaire personnel · Référence " + r["receipt_no"],
         )
         c.drawRightString(189 * mm, 10 * mm, "Page " + str(d.page))
+        c.restoreState()
+
+    doc.build(story, onFirstPage=footer, onLaterPages=footer)
+    return stream.getvalue()
+
+
+def build_report(r):
+    def compact(value, size=8, color="#263f34", bold=False, align=0):
+        paragraph = para(value, size, color, bold, align)
+        paragraph.style.leading = size * 1.3
+        return paragraph
+
+    stream = BytesIO()
+    width = 174 * mm
+    doc = SimpleDocTemplate(
+        stream,
+        pagesize=(210 * mm, 297 * mm),
+        rightMargin=18 * mm,
+        leftMargin=18 * mm,
+        topMargin=14 * mm,
+        bottomMargin=25 * mm,
+        title=r["reference"],
+        author=r["issuer_name"],
+    )
+    logo = Image(
+        str(Path(__file__).parent / "public/icons/icon-192.png"), width=32, height=32
+    )
+    brand = Table(
+        [
+            [
+                logo,
+                [
+                    compact("Sillage", 19, bold=True),
+                    compact("VOS FINANCES, EN CLAIR", 6, "#74867e"),
+                ],
+            ]
+        ],
+        colWidths=[44, width - 44],
+    )
+    brand.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ]
+        )
+    )
+    story = [
+        brand,
+        Spacer(1, 10),
+        compact(r["title"], 17, bold=True),
+        compact(r["subject"], 11),
+        compact(
+            r["reference"]
+            + " · Émis le "
+            + r["date"]
+            + " · Montants en "
+            + r["currency"],
+            7,
+            "#74867e",
+        ),
+        Spacer(1, 9),
+    ]
+    facts = [compact(label + " : " + value, 8) for label, value in r["facts"]]
+    if len(facts) % 2:
+        facts.append(compact("", 8))
+    info = Table(
+        [facts[i : i + 2] for i in range(0, len(facts), 2)], colWidths=[width / 2] * 2
+    )
+    info.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ]
+        )
+    )
+    story.extend([info, Spacer(1, 10)])
+    totals = Table(
+        [
+            [compact(label, 7, "#d7eadc", True) for label, value in r["summary"]],
+            [
+                compact(
+                    amount(value, r["currency"]),
+                    10 if len(amount(value, r["currency"])) < 20 else 8,
+                    "#ffffff",
+                    True,
+                )
+                for label, value in r["summary"]
+            ],
+        ],
+        colWidths=[width / len(r["summary"])] * len(r["summary"]),
+    )
+    totals.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), GREEN),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                ("TOPPADDING", (0, 0), (-1, -1), 7),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ]
+        )
+    )
+    story.append(totals)
+    if r.get("notes"):
+        story.extend(
+            [
+                Spacer(1, 10),
+                compact("OBSERVATIONS", 8, bold=True),
+                compact(r["notes"], 9),
+            ]
+        )
+    for section in r["sections"]:
+        story.extend(
+            [Spacer(1, 12), compact(section["title"], 10, bold=True), Spacer(1, 6)]
+        )
+        n = len(section["columns"])
+        widths = (
+            [0.15, 0.42, 0.16, 0.11, 0.16]
+            if n == 5
+            else (
+                [0.16, 0.30, 0.20, 0.34]
+                if section["title"].startswith("Historique exhaustif")
+                else [0.16, 0.44, 0.20, 0.20]
+            )
+        )
+        data = [[compact(label, 7, "#ffffff", True) for label in section["columns"]]]
+        for row in section["rows"]:
+            data.append(
+                [
+                    compact(
+                        (
+                            amount(value, "").strip()
+                            if i in section["money_columns"]
+                            else value
+                        ),
+                        7,
+                    )
+                    for i, value in enumerate(row)
+                ]
+            )
+        if len(data) == 1:
+            data.append(
+                [compact("Aucune opération", 8)]
+                + [compact("", 8) for _ in range(n - 1)]
+            )
+        t = Table(
+            data,
+            colWidths=[width * x for x in widths],
+            repeatRows=1,
+            hAlign="LEFT",
+            splitInRow=1,
+        )
+        t.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), GREEN),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 7),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+                    ("TOPPADDING", (0, 0), (-1, -1), 5),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, LIGHT]),
+                    ("LINEBELOW", (0, 0), (-1, -1), 0.3, colors.HexColor("#dce6de")),
+                ]
+            )
+        )
+        story.append(t)
+    sign = Table(
+        [
+            [
+                [
+                    compact("Émis par " + r["issuer_name"], 9, bold=True),
+                    Spacer(1, 8),
+                    signature_image(r.get("signature_png"), 170, 58),
+                    compact("Signature de profil — copie", 7, "#74867e"),
+                ],
+                Stamp(r["date"], r["stamp"]),
+            ]
+        ],
+        colWidths=[width - 150, 150],
+    )
+    sign.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
+    story.append(
+        KeepTogether(
+            [
+                Spacer(1, 18),
+                sign,
+                compact(
+                    "Relevé arrêté à la date d’émission. Le cachet et la copie de signature sont applicatifs : aucune certification bancaire ni signature électronique qualifiée.",
+                    7,
+                    "#74867e",
+                ),
+            ]
+        )
+    )
+
+    def footer(c, d):
+        c.saveState()
+        c.setFont("Sillage", 6)
+        c.setFillColor(MUTED)
+        c.drawString(18 * mm, 16 * mm, "Empreinte des données : " + r["document_hash"])
+        c.drawString(
+            18 * mm,
+            12 * mm,
+            r["reference"] + " · Exemplaire personnel · " + r["issuer_name"][:32],
+        )
+        c.drawRightString(192 * mm, 12 * mm, "Page " + str(d.page))
         c.restoreState()
 
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
