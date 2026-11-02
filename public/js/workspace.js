@@ -291,6 +291,11 @@ const Workspace = {
     const image = document.getElementById("signaturePreview");
     image.hidden = true;
     image.removeAttribute("src");
+    document.getElementById("tpfPersonId").innerHTML =
+      '<option value="">Nouvelle personne</option>';
+    document.getElementById("loanCashSource").replaceChildren();
+    document.getElementById("signatureState").textContent =
+      "Aucune signature configurée.";
     [
       "documentHistory",
       "personLedgerContent",

@@ -548,6 +548,13 @@ const fs = require("node:fs/promises");
     const recovery = await page.locator("#invitationCode").textContent();
     await page.locator(".logout-button").click();
     await page.waitForFunction(() => !Family.user);
+    assert.equal(await page.locator("#tpfPersonId option").count(), 1);
+    assert.equal(await page.locator("#loanCashSource option").count(), 0);
+    assert.equal(
+      await page.locator("#signaturePreview").getAttribute("src"),
+      null,
+    );
+    assert.equal(await page.locator("#documentHistory").textContent(), "");
     await page
       .getByRole("button", { name: "Réinitialiser avec un code" })
       .click();
