@@ -399,7 +399,9 @@ const fs = require("node:fs/promises");
     await page.locator("#signatureForm [type=submit]").click();
     assert.equal((await upload).status(), 200);
     await page.waitForFunction(
-      () => !document.getElementById("signaturePreview").hidden,
+      () =>
+        !document.getElementById("signaturePreview").hidden &&
+        document.getElementById("signaturePreview").naturalWidth > 0,
     );
     await page.evaluate(() => App.switchTab("loans-borrowed"));
     await page
