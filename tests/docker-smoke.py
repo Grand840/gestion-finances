@@ -9,6 +9,9 @@ from uuid import uuid4
 
 import httpx
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from seals import verify_snapshot
+
 EMAIL = "docker-ci@example.test"
 PASSWORD = "Only-for-disposable-CI-2026!"
 STATE = Path("test-results/docker-state.json")
@@ -48,6 +51,19 @@ def main():
                 "/api/documents/" + state["document"] + "/pdf"
             ).content.startswith(b"%PDF-")
             assert client.get("/api/people").json()[0]["balance"] == 500
+            for kind, identifier in [
+                ("receipt", state["receipt"]),
+                ("documents", state["document"]),
+            ]:
+                snapshot = client.get(f"/api/{kind}/{identifier}/proof").json()[
+                    "snapshot"
+                ]
+                result = verify_snapshot(snapshot, state["key_fingerprint"])
+                assert result["signature_valid"] and result["trusted_key_match"]
+            assert (
+                client.get("/api/profile/document-key").json()["key_fingerprint"]
+                == state["key_fingerprint"]
+            )
             print(
                 "OK — données, signature, comptes dédiés et PDF préservés après restauration ; ancienne session révoquée."
             )
@@ -67,6 +83,7 @@ def main():
             code=env["SETUP_TOKEN"],
         )
         client.headers["X-CSRF-Token"] = auth["csrf_token"]
+        assert client.get("/api/profile/signature-source").json()["available"]
         aid = client.get("/api/accounts").json()[0]["id"]
         post(
             client,
@@ -151,6 +168,9 @@ def main():
                     receipt=rid,
                     document=document["id"],
                     session=client.cookies.get("sillage_session"),
+                    key_fingerprint=client.get("/api/profile/document-key").json()[
+                        "key_fingerprint"
+                    ],
                 )
             )
         )

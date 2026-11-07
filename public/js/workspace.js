@@ -195,13 +195,15 @@ const Workspace = {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
   async loadDocuments() {
+    const epoch = Family.epoch;
     try {
       const rows = await API.request("/documents");
+      if (epoch !== Family.epoch) return;
       document.getElementById("documentHistory").innerHTML =
         rows
           .map(
             (d) =>
-              `<article class="document-history-row"><div><strong>${this.esc(d.title)} · ${this.esc(d.subject)}</strong><small>${this.esc(d.reference)} · ${App.formatDate(d.created_at)}</small></div><button class="btn btn-secondary btn-sm" onclick="Workspace.downloadPDF('${d.id}','${d.reference}').catch(e=>App.notify(e.message,true))">PDF</button></article>`,
+              `<article class="document-history-row"><div><strong>${this.esc(d.title)} · ${this.esc(d.subject)}</strong><small>${this.esc(d.reference)} · ${App.formatDate(d.created_at)} · ${d.sealed ? "Scellé Ed25519" : "Archive SHA-256"}</small></div><button class="btn btn-secondary btn-sm" onclick="Workspace.downloadPDF('${d.id}','${d.reference}').catch(e=>App.notify(e.message,true))">PDF</button><a class="btn btn-secondary btn-sm" href="/api/documents/${encodeURIComponent(d.id)}/proof" download>${d.sealed ? "Preuve" : "Empreinte"}</a></article>`,
           )
           .join("") ||
         '<p class="field-hint">Aucun rapport ou relevé émis.</p>';
@@ -222,7 +224,7 @@ const Workspace = {
       img.hidden = true;
       img.removeAttribute("src");
       document.getElementById("signatureState").textContent = response.ok
-        ? "Signature importée · copie privée pour vos documents."
+        ? "Signature prête · réservée à vos documents."
         : "Aucune signature configurée.";
       if (response.ok) {
         const blob = await response.blob();
@@ -234,6 +236,44 @@ const Workspace = {
     } catch (err) {
       if (epoch === Family.epoch)
         App.notify("Aperçu de signature indisponible.", true);
+    }
+  },
+  async loadDocumentIdentity() {
+    const epoch = Family.epoch;
+    document.getElementById("repositorySignature").hidden = true;
+    document.getElementById("documentKey").textContent =
+      "Clé créée à l’émission du premier document scellé.";
+    try {
+      const key = await API.request("/profile/document-key");
+      if (epoch !== Family.epoch) return;
+      if (key.available)
+        document.getElementById("documentKey").textContent =
+          "Clé Ed25519 · " + key.key_fingerprint;
+      if (Family.user?.role === "admin") {
+        const source = await API.request("/profile/signature-source");
+        if (epoch !== Family.epoch) return;
+        document.getElementById("repositorySignature").hidden =
+          !source.available;
+      }
+    } catch (error) {
+      if (epoch === Family.epoch) App.notify(error.message, true);
+    }
+  },
+  async useRepositorySignature() {
+    if (
+      !confirm(
+        "Je suis Younous Tchao, cette signature est la mienne et j’autorise son insertion sur les futurs documents émis depuis mon profil. Remplacer ma signature actuelle ?",
+      )
+    )
+      return;
+    try {
+      await API.post("/profile/signature-source", { consent: true });
+      await this.loadSignature();
+      App.notify(
+        "Votre signature est prête. Les documents déjà émis restent inchangés.",
+      );
+    } catch (error) {
+      App.notify(error.message, true);
     }
   },
   async removeSignature() {
@@ -283,6 +323,8 @@ const Workspace = {
     App.openModal("deleteAccountModal");
   },
   reset() {
+    document.getElementById("repositorySignature").hidden = true;
+    document.getElementById("documentKey").textContent = "";
     this.people = [];
     this.cashLoan = null;
     this.cashMode = null;
@@ -318,6 +360,7 @@ Family.onTab = (tab) => {
   originalOnTab(tab);
   if (tab === "settings" && Family.user) {
     Workspace.loadSignature();
+    Workspace.loadDocumentIdentity();
     Workspace.loadDocuments();
   }
 };
@@ -348,22 +391,31 @@ Family.displayReceipt = (receipt) => {
     );
     const img = document.createElement("img");
     img.className = "profile-signature";
-    img.alt = "Copie de la signature du titulaire";
+    img.alt = "Signature de l’émetteur";
     img.src = "data:image/png;base64," + receipt.signature_png;
     target.insertBefore(img, target.querySelector("i"));
   }
   const stamp = signatures.querySelector(":scope > img");
   const label =
     receipt.loan_type === "given" ? "QUITTANCE DE PRÊT" : "REÇU D’EMPRUNT";
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180"><g transform="rotate(-7 90 90)" fill="none" stroke="#174f42"><circle cx="90" cy="90" r="80" stroke-width="2"/><circle cx="90" cy="90" r="73" stroke-width=".7"/><path d="M40 70h100"/><g fill="#174f42" stroke="none" text-anchor="middle" font-family="sans-serif"><text x="90" y="59" font-size="22" font-weight="bold">SILLAGE</text><text x="90" y="94" font-size="10" font-weight="bold">${label}</text><text x="90" y="119" font-size="11">${Workspace.esc(receipt.date)}</text><text x="90" y="143" font-size="7">COPIE APPLICATIVE · NON OFFICIEL</text></g></g></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180"><g transform="rotate(-7 90 90)" fill="none" stroke="#174f42"><circle cx="90" cy="90" r="80" stroke-width="2"/><circle cx="90" cy="90" r="73" stroke-width=".7"/><path d="M40 70h100"/><g fill="#174f42" stroke="none" text-anchor="middle" font-family="sans-serif"><text x="90" y="59" font-size="22" font-weight="bold">SILLAGE</text><text x="90" y="94" font-size="10" font-weight="bold">${label}</text><text x="90" y="119" font-size="11">${Workspace.esc(receipt.date)}</text><text x="90" y="143" font-size="7">ÉMIS ET ENREGISTRÉ</text></g></g></svg>`;
   stamp.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
   stamp.alt = "Cachet Sillage · " + label;
   stamp.classList.add("receipt-stamp");
+  if (receipt.seal) {
+    const note = document.createElement("p");
+    note.className = "document-seal-caption";
+    note.textContent =
+      "Scellé Ed25519 · Clé " +
+      receipt.seal.key_fingerprint.slice(0, 20) +
+      " · " +
+      receipt.seal.issued_at.slice(0, 10);
+    document.querySelector(".document-footer").prepend(note);
+  }
   if (receipt.signature_reissued) {
     const note = document.createElement("p");
     note.className = "field-hint";
-    note.textContent =
-      "Ancien reçu : signature de profil actuelle appliquée à cette réédition.";
+    note.textContent = "Réédition avec la signature actuelle de l’émetteur.";
     document.querySelector(".document-footer").prepend(note);
   }
 };

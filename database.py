@@ -502,6 +502,9 @@ def repay(db, user, data, kind):
     snapshot["document_hash"] = hashlib.sha256(
         json.dumps(snapshot, sort_keys=True, ensure_ascii=False).encode()
     ).hexdigest()
+    from seals import apply_seal
+
+    apply_seal(db, user, snapshot)
     db.execute(
         "UPDATE loans SET current_balance=%s,status=%s WHERE id=%s AND user_id=%s",
         [remaining, "settled" if remaining == 0 else "active", loan["id"], uid],

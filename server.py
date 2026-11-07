@@ -1,8 +1,6 @@
 """Sillage family server: cookie sessions, PostgreSQL and isolated financial spaces."""
 
 import base64
-from io import BytesIO
-from PIL import Image, ImageOps, UnidentifiedImageError
 import hashlib
 import hmac
 import json
@@ -28,6 +26,8 @@ from pydantic import BaseModel, Field, ConfigDict
 import database as store
 from receipts import build_pdf, build_report
 from documents import freeze
+from seals import apply_seal, proof, key_fingerprint
+from signatures import normalize_signature, IMAGE_ERRORS
 
 ROOT = Path(__file__).parent
 PASSWORDS = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=2)
@@ -54,7 +54,7 @@ async def lifespan(app):
 
 app = FastAPI(
     title="Sillage",
-    version="2.1.0",
+    version="2.2.0",
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,
@@ -655,7 +655,7 @@ def restore_account(aid: str, user=Depends(current_user)):
 
 def receipt_view(db, uid, rid):
     snapshot = dict(store.owned(db, "receipts", uid, rid)["snapshot"])
-    if not snapshot.get("signature_png"):
+    if not snapshot.get("signature_png") and not snapshot.get("seal"):
         snapshot["signature_png"] = store.signature(db, uid)
         snapshot["signature_reissued"] = bool(snapshot["signature_png"])
     return snapshot
@@ -713,22 +713,11 @@ def profile_signature(user=Depends(current_user)):
 @app.put("/api/profile/signature")
 async def upload_signature(request: Request, user=Depends(current_user)):
     try:
-        image = Image.open(BytesIO(await request.body()))
-        if image.format not in ("PNG", "JPEG") or image.width * image.height > 4000000:
-            raise ValueError()
-        image.load()
-        image = ImageOps.exif_transpose(image).convert("RGBA")
-        image.info.clear()
-        image.thumbnail((900, 300))
-        stream = BytesIO()
-        image.save(stream, format="PNG", optimize=True)
-        binary = stream.getvalue()
-        if len(binary) > 131072:
-            raise ValueError()
-    except (UnidentifiedImageError, ValueError, OSError, Image.DecompressionBombError):
+        binary = normalize_signature(await request.body())
+    except IMAGE_ERRORS:
         raise HTTPException(
             422,
-            "Image PNG/JPEG requise : 512 Ko et 4 millions de pixels maximum. Une signature simple sur fond uni est recommandée.",
+            "Signature PNG/JPEG visible requise : 512 Ko et 4 millions de pixels maximum.",
         )
     with store.connect() as db:
         latest = store.one(
@@ -750,6 +739,81 @@ def remove_signature(user=Depends(current_user)):
         db.execute("UPDATE users SET signature_png=NULL WHERE id=%s", [user["id"]])
         store.audit(db, user["id"], "signature.removed")
     return dict(success=True)
+
+
+class RepositorySignature(Form):
+    consent: bool
+
+
+REPOSITORY_SIGNATURE = ROOT / "signature" / "sign younous.jpg"
+
+
+@app.get("/api/profile/signature-source")
+def signature_source(user=Depends(admin)):
+    return dict(available=REPOSITORY_SIGNATURE.is_file(), owner="Younous Tchao")
+
+
+@app.post("/api/profile/signature-source")
+def import_repository_signature(data: RepositorySignature, user=Depends(admin)):
+    if not data.consent:
+        raise HTTPException(422, "Votre autorisation explicite est nécessaire.")
+    if not REPOSITORY_SIGNATURE.is_file():
+        raise HTTPException(404, "Image de signature absente du serveur.")
+    try:
+        binary = normalize_signature(REPOSITORY_SIGNATURE.read_bytes())
+    except IMAGE_ERRORS:
+        raise HTTPException(422, "Image de signature inexploitable.")
+    with store.connect() as db:
+        latest = store.one(
+            db, "SELECT * FROM users WHERE id=%s FOR UPDATE", [user["id"]]
+        )
+        if not latest["active"] or latest["role"] != "admin":
+            raise HTTPException(403, "Compte administrateur actif requis.")
+        db.execute(
+            "UPDATE users SET signature_png=%s WHERE id=%s", [binary, user["id"]]
+        )
+        store.audit(db, user["id"], "signature.repository_imported")
+    return dict(success=True)
+
+
+@app.get("/api/profile/document-key")
+def document_public_key(user=Depends(current_user)):
+    with store.connect() as db:
+        key = store.one(
+            db, "SELECT id,public_key FROM document_keys WHERE user_id=%s", [user["id"]]
+        )
+    if not key:
+        return dict(available=False)
+    return dict(
+        available=True,
+        algorithm="Ed25519",
+        key_id=key["id"],
+        public_key=base64.b64encode(key["public_key"]).decode("ascii"),
+        key_fingerprint=key_fingerprint(key["public_key"]),
+    )
+
+
+def proof_response(snapshot, reference):
+    return JSONResponse(
+        proof(snapshot),
+        headers={
+            "Content-Disposition": f'attachment; filename="{reference}-preuve.json"',
+        },
+    )
+
+
+@app.get("/api/receipt/{rid}/proof")
+def receipt_proof(rid: str, user=Depends(current_user)):
+    with store.connect() as db:
+        snapshot = store.owned(db, "receipts", user["id"], rid)["snapshot"]
+    return proof_response(snapshot, snapshot["receipt_no"])
+
+
+@app.get("/api/documents/{did}/proof")
+def document_proof(did: str, user=Depends(current_user)):
+    with store.connect() as db:
+        snapshot = store.owned(db, "documents", user["id"], did)["snapshot"]
+    return proof_response(snapshot, snapshot["reference"])
 
 
 @app.get("/api/people")
@@ -782,6 +846,7 @@ def create_document(data: dict, user=Depends(current_user)):
         if not latest["active"]:
             raise HTTPException(401, "Compte désactivé.")
         snapshot = freeze(db, latest, data.get("kind"), data.get("resource_id"))
+        apply_seal(db, latest, snapshot)
         db.execute(
             "INSERT INTO documents(id,user_id,kind,reference,snapshot) VALUES (%s,%s,%s,%s,%s)",
             [
@@ -801,7 +866,7 @@ def list_documents(user=Depends(current_user)):
     with store.connect() as db:
         return store.rows(
             db,
-            "SELECT id,kind,reference,created_at,snapshot->>'title' title,snapshot->>'subject' subject FROM documents WHERE user_id=%s ORDER BY created_at DESC LIMIT 100",
+            "SELECT id,kind,reference,created_at,snapshot->>'title' title,snapshot->>'subject' subject,snapshot ? 'seal' sealed FROM documents WHERE user_id=%s ORDER BY created_at DESC LIMIT 100",
             [user["id"]],
         )
 

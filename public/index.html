@@ -969,9 +969,10 @@
         <div class="panel signature-panel">
           <div class="panel-heading">
             <div>
-              <h2>Signature des documents</h2>
+              <h2>Identité documentaire</h2>
               <p>
-                Image privée, intégrée aux nouveaux reçus, rapports et relevés.
+                Votre signature et le scellé d’intégrité de vos reçus, rapports
+                et relevés.
               </p>
             </div>
           </div>
@@ -985,6 +986,21 @@
             <p id="signatureState" class="field-hint">
               Aucune signature configurée.
             </p>
+            <div id="repositorySignature" class="repository-signature" hidden>
+              <strong>Votre signature est disponible sur le serveur.</strong>
+              <p>
+                Younous Tchao · tracé original, fond nettoyé et proportions
+                conservées. Son activation est réservée à votre profil
+                administrateur.
+              </p>
+              <button
+                type="button"
+                class="btn btn-primary"
+                onclick="Workspace.useRepositorySignature()"
+              >
+                Activer ma signature du dépôt
+              </button>
+            </div>
             <form id="signatureForm">
               <label class="form-label" for="signatureFile"
                 >Image PNG ou JPEG · 512 Ko maximum</label
@@ -996,8 +1012,7 @@
                 required
               /><label class="signature-consent"
                 ><input type="checkbox" required /> Cette image est ma signature
-                ; j’autorise son insertion comme copie de profil sur mes
-                documents.</label
+                ; j’autorise son insertion sur mes documents.</label
               ><button type="submit" class="btn btn-primary">
                 Importer ma signature</button
               ><button
@@ -1009,12 +1024,23 @@
               </button>
             </form>
             <p class="field-hint">
-              Les nouveaux documents conservent la signature au moment de leur
-              émission. Les anciens reçus sans signature affichent la signature
-              actuelle à la réédition. Aucune image de signature n’est fournie
-              par défaut. Cette copie n’est pas une signature électronique
-              certifiée.
+              La signature est figée à l’émission. Son remplacement ne modifie
+              pas les documents déjà émis. Les reçus historiques sans scellé
+              peuvent être réédités avec votre signature actuelle ; la réédition
+              est indiquée.
             </p>
+            <div class="document-integrity-info">
+              <h3>Scellé électronique d’intégrité</h3>
+              <p>
+                Chaque nouveau document est scellé avec une clé Ed25519 propre à
+                votre compte. Téléchargez sa preuve JSON pour contrôler ses
+                données et sa signature cryptographique. L’image manuscrite
+                identifie l’émetteur ; le scellé protège les données figées. Il
+                ne s’agit pas d’une signature PDF PAdES ni d’une signature
+                qualifiée délivrée par un tiers certificateur.
+              </p>
+              <code id="documentKey"></code>
+            </div>
           </div>
         </div>
         <div class="panel">
