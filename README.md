@@ -1,6 +1,34 @@
 # Sillage Famille
 
-**Vos finances, en clair.** Une application web familiale en français, auto-hébergée : chaque membre possède son propre espace financier. Version 2 : authentification serveur, PostgreSQL, reçus PDF et Docker Compose.
+**Vos finances, en clair.** Une application web familiale en français, auto-hébergée : chaque membre possède son propre espace financier. Version 2.2 : authentification serveur, PostgreSQL, reçus PDF et Docker Compose.
+
+## Nouveautés 2.2 — identité documentaire et scellés électroniques
+
+- **Documents épurés** : plus de mention « exemplaire personnel », de nom répété dans le pied de page ou de longues mises en garde sur les PDF. L’émetteur reste identifié aux endroits utiles. Cachet documentaire Sillage agrandi, contextualisé et daté : **ÉMIS ET ENREGISTRÉ**.
+- **Vraie signature préparée** : proportions et tracé conservés, fond blanc nettoyé/transparence, recadrage avec marges, métadonnées retirées. La source `signature/sign younous.jpg` reste hors des ressources statiques. Après déploiement, Younous active sa signature dans **Paramètres → Identité documentaire → Activer ma signature du dépôt**, avec confirmation explicite ; seul le profil administrateur peut effectuer cette action. Aucun autre membre ne reçoit cette signature. Chaque membre peut importer sa propre image.
+- **Scellé Ed25519** : les nouveaux reçus, rapports de prêt/emprunt et relevés de compte/tiers reçoivent une signature cryptographique des données figées. Une clé propre à chaque compte est créée à sa première émission et conservée en PostgreSQL. Écriture financière, reçu et scellé restent atomiques ; aucun service externe n’est appelé.
+- **Preuve d’intégrité JSON** : bouton dans l’aperçu du reçu et dans l’historique des documents. Elle contient les données, l’image figée, le scellé et la clé publique, **jamais la clé privée**. Elle est privée, comme le PDF : ne la partager qu’avec les destinataires voulus. L’empreinte complète de la clé est visible dans les paramètres.
+- **Archives conservées** : pas de signature cryptographique ajoutée rétroactivement. Un reçu historique sans image peut garder le comportement de réédition explicite ; sa preuve porte toujours sur les données originales. Les nouveaux documents scellés restent strictement identiques, même s’ils ont été émis sans image. Pour un ancien rapport, émettre un nouveau document depuis le dossier.
+
+### Vérifier une preuve hors ligne
+
+Depuis le dépôt avec les dépendances Python installées :
+
+```bash
+python scripts/verify_document.py /chemin/document-preuve.json
+# Avec l’empreinte complète obtenue séparément depuis le compte émetteur :
+python scripts/verify_document.py /chemin/document-preuve.json --trusted-key EMPREINTE_SHA256_DE_LA_CLE
+```
+
+Le contrôle recalcule l’empreinte des données et vérifie Ed25519, sans connexion au serveur. Un statut « valide » inséré dans le fichier ne suffit pas : il est recalculé. Le programme sort avec un code non nul si les données, la signature ou la clé attendue ne correspondent pas. Sans clé de confiance obtenue séparément, il vérifie la cohérence cryptographique, pas l’identité indépendante de l’émetteur : quelqu’un pourrait fabriquer une autre paire de clés.
+
+**Portée exacte** : l’image est la reproduction de la signature manuscrite autorisée ; le scellé est une signature applicative des **données figées**, pas des octets du PDF (pas de PAdES ni de certificat Adobe). Le cachet désigne l’émission et l’enregistrement dans Sillage, pas une autorité bancaire ou étatique. La date provient du serveur, sans horodatage certifié externe. Les clés sont gérées par l’application ; ce dispositif n’est pas une signature électronique qualifiée ni une attestation indépendante d’identité. Les détails techniques restent dans les paramètres et cette documentation, pas en avertissement répété sur chaque document.
+
+### Mise à jour depuis 2.1
+
+Sauvegarder d’abord avec `./scripts/backup.sh`, puis reconstruire et redémarrer avec `docker compose up -d --build --wait` (ajouter `--profile https` si utilisé). La migration additive `004_document_seals.sql` crée uniquement la table de clés : **aucun solde, compte, reçu ou rapport existant n’est réinitialisé**. Recharger l’interface pour prendre le service worker v6, puis activer sa signature et émettre un nouveau rapport pour vérifier le résultat. Conserver `.env` et les volumes ; ne pas utiliser `down -v`.
+
+Les sauvegardes PostgreSQL incluent les clés privées nécessaires aux prochaines émissions : elles doivent être chiffrées et protégées comme les données financières. L’export personnel JSON et les preuves n’exportent pas ces clés. Une compromission du serveur ou d’une sauvegarde peut compromettre le scellé applicatif. Pour un dépôt partagé/public, ne pas y ajouter de nouvelles signatures personnelles ; utiliser l’import privé depuis les paramètres. La confidentialité HTTP de la source ne retire pas l’image déjà inscrite dans l’historique Git.
 
 ## Nouveautés 2.1 — dossiers, comptes dédiés et documents
 
@@ -16,11 +44,11 @@ Ces comptes dédiés sont des **compartiments de gestion internes** : ils ne cr�
 
 ### Importer la signature
 
-Dans **Paramètres → Signature des documents**, importer sa propre image PNG/JPEG et confirmer l’autorisation d’en insérer une copie. Limites : 512 Ko, 4 millions de pixels ; normalisation PNG, orientation respectée, métadonnées supprimées, dimension maximale 900 × 300. L’image reste en PostgreSQL, n’est jamais publiée dans les ressources statiques et fait partie des sauvegardes.
+Dans **Paramètres → Identité documentaire**, importer sa propre image PNG/JPEG et confirmer l’autorisation d’en insérer une copie. Limites : 512 Ko, 4 millions de pixels ; normalisation PNG, orientation respectée, métadonnées supprimées, fond blanc transparent et recadrage conservateur, dimension maximale 900 × 300. L’image reste en PostgreSQL, n’est jamais publiée dans les ressources statiques et fait partie des sauvegardes.
 
-Les nouveaux reçus signés et rapports/relevés conservent la copie de signature à leur émission. Un changement ou retrait du profil ne modifie pas ces documents. Pour un reçu sans signature à l’origine, la signature actuelle peut être appliquée à la réédition : c’est indiqué explicitement et elle reste hors de l’empreinte du reçu original. Les anciens rapports figés ne sont pas réécrits : émettre un nouveau rapport depuis le dossier pour utiliser la nouvelle signature.
+Les nouveaux reçus signés et rapports/relevés conservent la copie de signature à leur émission. Un changement ou retrait du profil ne modifie pas ces documents. Pour un reçu historique non scellé et sans signature à l’origine, la signature actuelle peut être appliquée à la réédition : c’est indiqué explicitement et elle reste hors de l’empreinte du reçu original. Les anciens rapports figés ne sont pas réécrits : émettre un nouveau rapport depuis le dossier pour utiliser la nouvelle signature.
 
-Le cachet vectoriel est agrandi et sa légende dépend du document : quittance de prêt, reçu d’emprunt, rapport d’engagement, relevé de tiers ou relevé de compte. Une signature importée est une **copie de profil**, pas la signature d’une autre partie ni une signature électronique certifiée. Aucune signature réelle ou fictive n’est installée par défaut ; les images « SPECIMEN » des tests ne sont utilisées que dans des bases éphémères.
+Le cachet vectoriel est agrandi et sa légende dépend du document : quittance de prêt, reçu d’emprunt, rapport d’engagement, relevé de tiers ou relevé de compte. Une signature importée est une **copie de profil**, pas la signature d’une autre partie ni une signature électronique certifiée. Aucune image n’est affectée automatiquement à un profil ; la source personnelle du dépôt nécessite l’activation administrateur avec consentement. Les images « SPECIMEN » des tests ne sont utilisées que dans des bases éphémères.
 
 ### Mise à jour depuis la version familiale 2.0
 
@@ -92,18 +120,18 @@ L’administrateur **technique du serveur** conserve naturellement accès à Pos
 
 ### Reçus professionnels
 
-Chaque remboursement crée **dans la même transaction PostgreSQL** un reçu personnel :
+Chaque remboursement crée **dans la même transaction PostgreSQL** un reçu de remboursement :
 
 - logo Sillage, référence unique, date et numéro de versement ;
 - identité des parties et motif de l’engagement ;
 - montant initial, solde avant versement, montant versé, cumul remboursé et **reste à rembourser** ;
 - compte utilisé, observations, état partiel/soldé et emplacements de signature ;
-- cachet vectoriel Sillage et empreinte SHA-256 des données du reçu ;
+- cachet documentaire Sillage, empreinte SHA-256 et scellé Ed25519 des données du reçu ;
 - aperçu immédiat, historique et **PDF généré côté serveur**, téléchargeable sans dépendre de l’impression du navigateur.
 
 Les informations du reçu sont figées au moment du versement : un changement de nom, un nouveau remboursement ou un renommage de compte ne réécrit pas un ancien reçu. PostgreSQL interdit les modifications/suppressions des reçus via un déclencheur.
 
-**Le cachet est applicatif, pas officiel.** L’empreinte n’est pas une signature cryptographique d’un tiers de confiance. Le PDF ne remplace ni une certification bancaire ni la signature effective des parties.
+La signature de l’émetteur n’est insérée que dans son emplacement ; les autres parties conservent leur propre zone de signature. La preuve d’intégrité est disponible séparément du PDF (voir la portée du scellé en section 2.2).
 
 ### Fiabilité des montants
 
@@ -154,7 +182,7 @@ Le code affiché est un secret personnel : ne le copiez pas dans les logs partag
 ./scripts/restore.sh backups/sillage-AAAAMMJJ-HHMMSS.dump
 ```
 
-La restauration demande confirmation, arrête l’application, remplace les objets dans une transaction, invalide les sessions et les codes en attente, puis redémarre l’application. **Testez une restauration sur une instance distincte avant de compter sur vos sauvegardes.** Une sauvegarde contient les informations financières, les copies de signatures, les documents et les empreintes de mots de passe : chiffrez-la et copiez-la sur un autre support avec accès restreint. Le volume Docker seul n’est pas une sauvegarde. L’export JSON personnel est consultable mais aucun import JSON n’est fourni.
+La restauration demande confirmation, arrête l’application, remplace les objets dans une transaction, invalide les sessions et les codes en attente, puis redémarre l’application. **Testez une restauration sur une instance distincte avant de compter sur vos sauvegardes.** Une sauvegarde contient les informations financières, les copies de signatures, les documents, les clés privées des scellés et les empreintes de mots de passe : chiffrez-la et copiez-la sur un autre support avec accès restreint. Le volume Docker seul n’est pas une sauvegarde. L’export JSON personnel est consultable mais aucun import JSON n’est fourni.
 
 Pour mettre à jour : sauvegardez, récupérez le code, puis `docker compose up -d --build`. Conservez `.env`. Ne lancez pas `docker compose down -v` sur des données à conserver : cela supprime les volumes.
 

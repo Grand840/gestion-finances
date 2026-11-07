@@ -1,5 +1,5 @@
 // Service Worker pour l'accès PWA hors-ligne
-const CACHE_NAME = "sillage-family-v5";
+const CACHE_NAME = "sillage-family-v6";
 const ASSETS_TO_CACHE = [
   "/",
   "/index.html",

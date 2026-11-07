@@ -327,6 +327,9 @@ def test_upgrade_preserves_existing_cash_and_history(client):
         connection.execute(
             Path("migrations/003_documents_wallets.sql").read_text(), prepare=False
         )
+        connection.execute(
+            Path("migrations/004_document_seals.sql").read_text(), prepare=False
+        )
         assert db.one(connection, "SELECT sum(balance) n FROM accounts")["n"] == 7000
         assert (
             db.one(connection, "SELECT balance FROM accounts WHERE id=%s", [aid])[
@@ -440,7 +443,11 @@ def test_long_report_is_paginated_with_every_installment(client):
     assert "Motif de versement détaillé numéro 35" in text
     assert "65,00 FCFA" in text
     assert "RAPPORT D’ENGAGEMENT" in text
-    assert "NON OFFICIEL" in text
+    assert "ÉMIS ET ENREGISTRÉ" in text
+    assert "Scellé Ed25519" in text
+    assert "NON OFFICIEL" not in text
+    assert "Exemplaire personnel" not in text
+    assert "certification bancaire" not in text
     for page in reader.pages:
         assert report["reference"] in page.extract_text()
 

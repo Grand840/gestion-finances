@@ -22,3 +22,4 @@ click==8.5.0
 h11==0.16.0
 cffi==2.1.1
 pycparser==3.12
+cryptography==50.0.2

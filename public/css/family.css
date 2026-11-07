@@ -1724,3 +1724,43 @@ body.modal-open {
 .account-edit-link[hidden] {
   display: none !important;
 }
+
+/* Documentary identity: private source, signature and compact verification key. */
+.repository-signature {
+  background: #edf4ee;
+  border: 1px solid #d6e5d9;
+  border-radius: 12px;
+  padding: 18px;
+  margin-bottom: 22px;
+}
+.repository-signature[hidden] {
+  display: none;
+}
+.repository-signature p,
+.document-integrity-info p {
+  font-size: 0.82rem;
+  line-height: 1.65;
+  color: #536b60;
+}
+.document-integrity-info {
+  border-top: 1px solid #dfe7de;
+  margin-top: 22px;
+  padding-top: 18px;
+}
+.document-integrity-info h3 {
+  font-size: 0.95rem;
+}
+#documentKey {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 0.75rem;
+  color: #174f42;
+}
+.document-history-row > div {
+  flex: 1;
+}
+.document-seal-caption {
+  font-weight: 600;
+  color: #174f42;
+  overflow-wrap: anywhere;
+}

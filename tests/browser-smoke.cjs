@@ -185,7 +185,9 @@ const fs = require("node:fs/promises");
       /^data:image\/svg/,
     );
     const receiptId = (
-      await page.locator(".document-actions a[download]").getAttribute("href")
+      await page
+        .locator('.document-actions a[href$="/pdf"]')
+        .getAttribute("href")
     ).split("/")[3];
     const download = page.waitForEvent("download");
     await page.getByRole("link", { name: "Télécharger le PDF" }).click();
@@ -194,6 +196,17 @@ const fs = require("node:fs/promises");
     const filePath = await file.path();
     assert(
       (await fs.readFile(filePath)).subarray(0, 5).equals(Buffer.from("%PDF-")),
+    );
+    const proofDownload = page.waitForEvent("download");
+    await page.getByRole("link", { name: "Preuve d’intégrité" }).click();
+    const proofFile = await proofDownload;
+    const proof = JSON.parse(await fs.readFile(await proofFile.path(), "utf8"));
+    assert.equal(proof.snapshot.seal.algorithm, "Ed25519");
+    assert.equal(proof.verification.signature_valid, true);
+    assert.equal(await page.locator(".document-seal-caption").count(), 1);
+    assert.doesNotMatch(
+      await page.locator(".receipt-document").textContent(),
+      /NON OFFICIEL|Exemplaire personnel|certification bancaire/,
     );
     if (screenshots) {
       await page.screenshot({
@@ -380,6 +393,40 @@ const fs = require("node:fs/promises");
     assert.equal(await page.evaluate(() => App.state.assets.length), 1);
     // New document identity and dossier workflows.
     await page.evaluate(() => App.switchTab("settings"));
+    await page.locator("#repositorySignature").waitFor({ state: "visible" });
+    page.once("dialog", (dialog) => dialog.dismiss());
+    await page
+      .getByRole("button", { name: "Activer ma signature du dépôt" })
+      .click();
+    assert.equal(
+      await page.evaluate(
+        async () => (await fetch("/api/profile/signature")).status,
+      ),
+      404,
+    );
+    page.once("dialog", (dialog) => dialog.accept());
+    const repositoryUpload = page.waitForResponse(
+      (r) =>
+        r.url().endsWith("/api/profile/signature-source") &&
+        r.request().method() === "POST",
+    );
+    await page
+      .getByRole("button", { name: "Activer ma signature du dépôt" })
+      .click();
+    assert.equal((await repositoryUpload).status(), 200);
+    await page.waitForFunction(
+      () =>
+        !document.getElementById("signaturePreview").hidden &&
+        document.getElementById("signaturePreview").naturalWidth > 0,
+    );
+    await page.waitForFunction(() =>
+      /Clé Ed25519/.test(document.getElementById("documentKey").textContent),
+    );
+    if (screenshots)
+      await page.screenshot({
+        path: path.join(root, "test-results/document-identity.png"),
+        fullPage: true,
+      });
     const signature = execFileSync(
       process.env.PYTHON || "python3",
       ["tests/signature-fixture.py"],
@@ -555,6 +602,11 @@ const fs = require("node:fs/promises");
       null,
     );
     assert.equal(await page.locator("#documentHistory").textContent(), "");
+    assert.equal(await page.locator("#documentKey").textContent(), "");
+    assert.equal(
+      await page.locator("#repositorySignature").getAttribute("hidden"),
+      "",
+    );
     await page
       .getByRole("button", { name: "Réinitialiser avec un code" })
       .click();
@@ -577,6 +629,11 @@ const fs = require("node:fs/promises");
       () => Family.user?.email === "member@example.test",
     );
     assert.equal(await page.evaluate(() => App.state.transactions.length), 0);
+    await page.evaluate(() => App.switchTab("settings"));
+    await page.waitForFunction(() =>
+      /Clé créée/.test(document.getElementById("documentKey").textContent),
+    );
+    assert.equal(await page.locator("#repositorySignature").isVisible(), false);
     assert.deepEqual(errors, []);
     console.log(
       "OK — inscription, connexion, déconnexion, isolation, opérations, détail de compte, prêts, remboursements, PDF, invitations, changement de mot de passe, suppression, signature privée, dossiers repliables, relevés de tiers, rapports PDF et 5 formats d’écran.",

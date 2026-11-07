@@ -57,7 +57,7 @@ def para(value, size=10, color="#263f34", bold=False, align=0):
 
 
 class Stamp(Flowable):
-    """Larger vector seal, with a document-specific legend, never an official seal."""
+    """Issuer document stamp, with a contextual legend and registration date."""
 
     def __init__(self, date, label="REÇU DE REMBOURSEMENT"):
         super().__init__()
@@ -95,9 +95,7 @@ class Stamp(Flowable):
         c.setFont("Sillage", 8)
         c.drawCentredString(0, -28, self.date)
         c.setFont("Sillage", 6)
-        c.drawCentredString(0, -40, "CACHET APPLICATIF")
-        c.setFont("Sillage", 5.5)
-        c.drawCentredString(0, -50, "NON OFFICIEL")
+        c.drawCentredString(0, -40, "ÉMIS ET ENREGISTRÉ")
         c.restoreState()
 
 
@@ -129,8 +127,21 @@ class SignatureBox(Flowable):
             self.canv.restoreState()
 
 
-def signature_image(data, width=120, height=40):
+def signature_image(data, width=126, height=48):
     return SignatureBox(data, width, height)
+
+
+def seal_caption(snapshot):
+    seal = snapshot.get("seal")
+    if not seal:
+        return "Archive · Empreinte des données enregistrées"
+    return (
+        "Scellé Ed25519 · Clé "
+        + seal["key_fingerprint"][:20]
+        + " · "
+        + seal["issued_at"][:19].replace("T", " à ")
+        + " UTC"
+    )
 
 
 def build_pdf(r):
@@ -141,9 +152,9 @@ def build_pdf(r):
         rightMargin=21 * mm,
         leftMargin=21 * mm,
         topMargin=18 * mm,
-        bottomMargin=22 * mm,
+        bottomMargin=28 * mm,
         title=r["receipt_no"],
-        author="Sillage",
+        author=r["issuer_name"],
     )
     width = 168 * mm
 
@@ -173,7 +184,7 @@ def build_pdf(r):
                     para("Sillage", 19, bold=True),
                     para("VOS FINANCES, EN CLAIR", 6, "#74867e"),
                 ],
-                para("DOCUMENT PERSONNEL\n" + r["receipt_no"], 8),
+                para("DOCUMENT DE GESTION\n" + r["receipt_no"], 8),
             ]
         ],
         [52, width - 230, 178],
@@ -278,7 +289,7 @@ def build_pdf(r):
     if r.get("signature_reissued"):
         story += [
             para(
-                "Ancien reçu : signature de profil actuelle appliquée à cette réédition.",
+                "Réédition avec la signature actuelle de l’émetteur.",
                 7,
                 "#74867e",
             ),
@@ -329,7 +340,7 @@ def build_pdf(r):
                 signatures,
                 Spacer(1, 8),
                 para(
-                    "Le cachet Sillage atteste uniquement l’enregistrement dans l’application. La signature importée est une copie de profil, non une signature électronique certifiée. Les autres parties signent elles-mêmes.",
+                    "Versement enregistré dans le dossier « " + r["loan_title"] + " ».",
                     7,
                     "#74867e",
                 ),
@@ -341,15 +352,14 @@ def build_pdf(r):
         c.saveState()
         c.setStrokeColor(colors.HexColor("#dce6de"))
         c.line(21 * mm, 18 * mm, 189 * mm, 18 * mm)
-        c.setFont("Sillage", 6)
+        c.setFont("Sillage", 7)
         c.setFillColor(MUTED)
-        c.drawString(
-            21 * mm, 14 * mm, "Empreinte des données (SHA-256) : " + r["document_hash"]
-        )
+        c.drawString(21 * mm, 14 * mm, "SHA-256 · " + r["document_hash"])
+        c.drawString(21 * mm, 22 * mm, seal_caption(r))
         c.drawString(
             21 * mm,
             10 * mm,
-            "Sillage · Exemplaire personnel · Référence " + r["receipt_no"],
+            "Sillage · " + r["receipt_no"],
         )
         c.drawRightString(189 * mm, 10 * mm, "Page " + str(d.page))
         c.restoreState()
@@ -532,7 +542,7 @@ def build_report(r):
                     compact("Émis par " + r["issuer_name"], 9, bold=True),
                     Spacer(1, 8),
                     signature_image(r.get("signature_png"), 170, 58),
-                    compact("Signature de profil — copie", 7, "#74867e"),
+                    compact("Signature de l’émetteur", 7, "#74867e"),
                 ],
                 Stamp(r["date"], r["stamp"]),
             ]
@@ -546,7 +556,7 @@ def build_report(r):
                 Spacer(1, 18),
                 sign,
                 compact(
-                    "Relevé arrêté à la date d’émission. Le cachet et la copie de signature sont applicatifs : aucune certification bancaire ni signature électronique qualifiée.",
+                    "Situation arrêtée à la date d’émission.",
                     7,
                     "#74867e",
                 ),
@@ -556,13 +566,14 @@ def build_report(r):
 
     def footer(c, d):
         c.saveState()
-        c.setFont("Sillage", 6)
+        c.setFont("Sillage", 7)
         c.setFillColor(MUTED)
-        c.drawString(18 * mm, 16 * mm, "Empreinte des données : " + r["document_hash"])
+        c.drawString(18 * mm, 20 * mm, seal_caption(r))
+        c.drawString(18 * mm, 16 * mm, "SHA-256 · " + r["document_hash"])
         c.drawString(
             18 * mm,
             12 * mm,
-            r["reference"] + " · Exemplaire personnel · " + r["issuer_name"][:32],
+            "Sillage · " + r["reference"],
         )
         c.drawRightString(192 * mm, 12 * mm, "Page " + str(d.page))
         c.restoreState()
