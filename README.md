@@ -1,6 +1,64 @@
 # Sillage Famille
 
-**Vos finances, en clair.** Une application web familiale en français, auto-hébergée : chaque membre possède son propre espace financier. Version 2.2 : authentification serveur, PostgreSQL, reçus PDF et Docker Compose.
+**Vos finances, en clair.** Une application web familiale en français, auto-hébergée : chaque membre possède son propre espace financier. Version 2.3 : budgets prévisionnels, authentification serveur, PostgreSQL, reçus PDF et Docker Compose.
+
+## Nouveautés 2.3 — budgets prévisionnels
+
+Une nouvelle rubrique **Budgets prévisionnels** permet de préparer ses dépenses sans toucher aux comptes, puis de décider explicitement de les engager.
+
+### Préparer un budget
+
+- Libellé, motif/objectif, projet/dossier, bénéficiaire/responsable et observations.
+- Date de préparation, début/fin de période et échéance générale.
+- De 1 à 50 lignes : libellé, catégorie, motif détaillé, bénéficiaire/fournisseur, quantité, prix unitaire, montant et échéance propre à la ligne.
+- Frais supplémentaires et total prévisionnel. Les quantités et prix acceptent deux décimales ; le serveur recalcule chaque montant en `Decimal`, arrondi au centime par ligne (`ROUND_HALF_UP`), puis additionne les frais. Les totaux envoyés par un client ne font jamais autorité.
+- Enregistrement/modification, recherche, filtres, pagination, duplication et annulation conservant l’historique. Un budget annulé peut être dupliqué mais ne peut pas être débité.
+
+**Un budget prévisionnel ne crée aucune écriture, ne réserve aucun fonds et ne modifie aucun solde**, même s’il est exporté en PDF. Il n’a pas de compte lié. La devise du compte utilisateur est verrouillée dès le premier budget pour éviter de réinterpréter des montants sans conversion.
+
+### Valider et débiter
+
+Dans le détail du budget, choisir **Valider et débiter un compte** :
+
+1. Sélectionner un **compte personnel actif**, de la même devise. Les compartiments tiers/emprunt restent exclus et protégés côté serveur.
+2. Indiquer la date du débit réel (aujourd’hui ou antérieure ; pas de débit daté dans le futur).
+3. Recopier la référence du budget et confirmer la case d’autorisation du **débit réel immédiat**.
+
+La validation débite **tout le total, frais inclus, une seule fois**, enregistre une dépense « Budget validé » portant la référence et le motif, fige le budget et émet automatiquement un document final. **Ce n’est pas une simple approbation sans dépense, ni un échéancier de paiements partiels.** Les échéances servent à planifier ; aucun prélèvement futur/automatique n’est exécuté. Pour une dépense future, garder le budget prévisionnel.
+
+L’opération est atomique : contrôle du solde, débit, écriture, validation et scellé du document sont réalisés ensemble. En cas d’échec, tout est annulé. Les doubles clics, répétitions réseau et validations simultanées ne peuvent pas provoquer un second débit. Un numéro de révision empêche de valider un ancien montant si un autre onglet a modifié le budget. En cas d’erreur réseau ambiguë, recharger le budget et consulter son statut avant de réessayer.
+
+Les budgets validés ne sont ni modifiables ni annulables : **dupliquer** prépare une nouvelle prévision sans débit. Aucune fonction de remboursement automatique n’est ajoutée.
+
+### PDF, cachet et signature
+
+**Émettre le PDF signé** crée une version documentaire immuable avec votre signature de profil configurée, le cachet contextuel, la référence, les lignes et échéances, les frais et le total. Les prévisions portent clairement **PRÉVISIONNEL — aucun débit ni réservation** ; le document final indique le compte débité, la date et la référence de l’écriture. L’historique du budget et **Paramètres → Documents émis** donnent accès aux PDF et preuves Ed25519. Changer de signature ou modifier une prévision ne réécrit pas les versions déjà émises. Si aucune image de signature n’est configurée, le document le signale ; activer/importer sa propre signature depuis les paramètres pour les prochaines émissions. La portée du scellé reste celle décrite en 2.2.
+
+Les budgets et documents sont isolés par utilisateur côté serveur (y compris vis-à-vis des autres administrateurs), nettoyés de l’interface à la déconnexion, inclus dans l’export JSON personnel et dans les sauvegardes PostgreSQL. Rien de financier n’est mis en cache hors ligne.
+
+### Mettre à jour le serveur depuis la 2.2
+
+Après fusion de cette version dans `main`, **dans le dossier d’installation existant**, conserver `.env` et le volume PostgreSQL :
+
+```bash
+./scripts/backup.sh
+# Vérifier le message de réussite, puis copier le .dump sur un support sécurisé.
+git status
+git pull --ff-only origin main
+docker compose up -d --build --wait
+docker compose ps
+docker compose logs --tail=80 app
+```
+
+Avec le HTTPS Caddy intégré, remplacer la commande de démarrage par :
+
+```bash
+docker compose --profile https up -d --build --wait
+```
+
+Si `git status` révèle des modifications locales ou si `git pull` échoue, arrêter et les examiner ; ne pas les écraser. La migration additive **`005_budgets.sql`** s’applique au démarrage, crée la table/contraintes nécessaires et ne réinitialise ni ne reclasse aucun solde, reçu, rapport, signature ou clé existant. Ne pas exécuter `docker compose down -v`, ne pas recréer le projet dans un nouveau dossier et ne pas remplacer `.env`.
+
+Recharger complètement le navigateur/PWA pour le service worker v7. Vérifier les anciens soldes, puis créer un budget de test et constater qu’il ne les modifie pas. **Ne pas valider un budget de test sur un vrai compte**, car cela enregistrerait une dépense réelle. La CI vérifie la migration depuis une base 2.2 peuplée et la conservation des prévisions, débits validés, documents et clés après sauvegarde/restauration Docker.
 
 ## Nouveautés 2.2 — identité documentaire et scellés électroniques
 

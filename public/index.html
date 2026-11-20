@@ -206,6 +206,13 @@
           ><span>Mes comptes</span>
         </button>
       </nav>
+      <nav class="side-nav">
+        <button class="nav-item" data-tab="budgets">
+          <svg class="icon" aria-hidden="true">
+            <use href="/icons/sprite.svg#grid"></use></svg
+          ><span>Budgets prévisionnels</span>
+        </button>
+      </nav>
       <div class="nav-label secondary-label">PATRIMOINE & ENGAGEMENTS</div>
       <nav class="side-nav">
         <button class="nav-item" data-tab="loans-given">
@@ -927,6 +934,184 @@
         </div>
       </section>
       <!-- ==================== 7. VUE PARAMÈTRES ==================== -->
+      <section id="view-budgets" class="view-section">
+        <div id="budgetBrowse">
+          <div class="budget-hero">
+            <div>
+              <span class="eyebrow">ANTICIPER AVANT D’ENGAGER</span>
+              <h2>Vos projets commencent ici.</h2>
+              <p>
+                Préparez vos dépenses ligne par ligne, fixez vos échéances et
+                décidez ensuite. Aucun compte n’est touché pendant la
+                préparation.
+              </p>
+            </div>
+            <button class="btn btn-primary" onclick="Budgets.edit(true)">
+              Préparer un budget
+            </button>
+          </div>
+          <form id="budgetSearchForm" class="budget-toolbar">
+            <label
+              >Rechercher<input
+                class="form-input"
+                id="budgetSearch"
+                placeholder="Libellé, projet, motif, référence…"
+                maxlength="160"
+                type="search"
+            /></label>
+            <label
+              >État<select id="budgetFilter" class="form-select">
+                <option value="all">Tous les budgets</option>
+                <option value="draft">Prévisionnels</option>
+                <option value="validated">Validés et débités</option>
+                <option value="cancelled">Annulés</option>
+              </select></label
+            >
+            <button type="submit" class="btn btn-secondary">Rechercher</button>
+          </form>
+          <p class="field-hint" id="budgetListCount" aria-live="polite"></p>
+          <div id="budgetList"></div>
+          <div class="action-wrap" id="budgetPagination" hidden>
+            <button
+              id="budgetPrevious"
+              class="btn btn-secondary"
+              onclick="Budgets.page(-1)"
+            >
+              Précédent</button
+            ><span id="budgetPage"></span
+            ><button
+              id="budgetNext"
+              class="btn btn-secondary"
+              onclick="Budgets.page(1)"
+            >
+              Suivant
+            </button>
+          </div>
+        </div>
+        <div id="budgetDetail" hidden></div>
+        <div id="budgetEditor" class="panel budget-detail-panel" hidden>
+          <button class="text-link" onclick="Budgets.browse()">
+            ← Retour aux budgets
+          </button>
+          <h2 id="budgetEditorTitle">Nouveau budget prévisionnel</h2>
+          <p class="budget-safety">
+            L’enregistrement ne crée aucune dépense et ne réserve aucun fonds.
+            Vous choisirez un compte uniquement si vous décidez de valider et
+            débiter le budget.
+          </p>
+          <form id="budgetForm">
+            <div class="budget-form-grid">
+              <label
+                >Libellé du budget *<input
+                  id="budgetTitle"
+                  class="form-input"
+                  maxlength="160"
+                  required
+                  placeholder="Ex. Travaux de la maison"
+              /></label>
+              <label
+                >Projet / dossier<input
+                  id="budgetProject"
+                  class="form-input"
+                  maxlength="160"
+                  placeholder="Projet associé"
+              /></label>
+              <label class="budget-wide"
+                >Motif / objectif *<textarea
+                  id="budgetPurpose"
+                  class="form-input"
+                  maxlength="1000"
+                  rows="3"
+                  required
+                  placeholder="Pourquoi préparez-vous ce budget ?"
+                ></textarea>
+              </label>
+              <label
+                >Bénéficiaire / responsable<input
+                  id="budgetBeneficiary"
+                  class="form-input"
+                  maxlength="160"
+              /></label>
+              <label
+                >Date de préparation *<input
+                  id="budgetDate"
+                  class="form-input"
+                  type="date"
+                  required
+              /></label>
+              <label
+                >Début de période<input
+                  id="budgetStart"
+                  class="form-input"
+                  type="date"
+              /></label>
+              <label
+                >Fin de période<input
+                  id="budgetEnd"
+                  class="form-input"
+                  type="date"
+              /></label>
+              <label
+                >Échéance générale<input
+                  id="budgetDue"
+                  class="form-input"
+                  type="date"
+              /></label>
+            </div>
+            <div class="budget-lines-heading">
+              <div>
+                <h3>Dépenses prévues</h3>
+                <p class="field-hint">
+                  Jusqu’à 50 lignes · quantités et prix à deux décimales ·
+                  montants arrondis par ligne.
+                </p>
+              </div>
+              <button
+                class="btn btn-secondary btn-sm"
+                type="button"
+                onclick="Budgets.addLine()"
+              >
+                Ajouter une ligne
+              </button>
+            </div>
+            <div id="budgetLines"></div>
+            <div class="budget-form-grid">
+              <label
+                >Frais supplémentaires prévus<input
+                  id="budgetFees"
+                  type="number"
+                  class="form-input"
+                  min="0"
+                  max="999999999999.99"
+                  step="0.01"
+                  value="0" /></label
+              ><label
+                >Observations / conditions<textarea
+                  id="budgetNotes"
+                  class="form-input"
+                  maxlength="2000"
+                  rows="3"
+                ></textarea>
+              </label>
+            </div>
+            <div class="budget-summary">
+              <span>Total prévisionnel, frais inclus</span
+              ><strong id="budgetTotal" aria-live="polite"></strong>
+            </div>
+            <div class="action-wrap">
+              <button type="submit" class="btn btn-primary">
+                Enregistrer sans débiter</button
+              ><button
+                type="button"
+                class="btn btn-secondary"
+                onclick="Budgets.browse()"
+              >
+                Quitter l’éditeur
+              </button>
+            </div>
+          </form>
+        </div>
+      </section>
       <section id="view-settings" class="view-section">
         <div class="chart-card-title">
           <span style="font-size: 1.15rem">Préférences & sauvegarde</span>
@@ -954,7 +1139,8 @@
 
             <p class="field-hint">
               Une seule devise par espace. Elle ne peut plus être changée après
-              la première opération, afin de ne pas mélanger les montants.
+              le premier budget ou la première opération, afin de ne pas
+              mélanger les montants.
             </p>
             <button
               type="submit"
@@ -2157,10 +2343,60 @@
         <div id="personLedgerContent"></div>
       </div>
     </div>
+    <div id="budgetValidationModal" class="modal-overlay no-print">
+      <div
+        class="modal-content"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="budgetValidationTitle"
+      >
+        <div class="modal-header">
+          <h3 class="modal-title" id="budgetValidationTitle">
+            Valider et débiter le budget
+          </h3>
+          <button class="close-btn close-modal-btn" aria-label="Fermer">
+            &times;
+          </button>
+        </div>
+        <p id="budgetValidationInfo" class="budget-safety"></p>
+        <form id="budgetValidationForm">
+          <label class="form-label" for="budgetAccount"
+            >Compte personnel à débiter *</label
+          ><select id="budgetAccount" class="form-select" required></select>
+          <label class="form-label" for="budgetPaymentDate"
+            >Date du débit réel *</label
+          ><input
+            id="budgetPaymentDate"
+            class="form-input"
+            type="date"
+            required
+          />
+          <label class="form-label" for="budgetConfirmation"
+            >Pour confirmer, recopiez
+            <strong id="budgetConfirmReference"></strong></label
+          ><input
+            id="budgetConfirmation"
+            class="form-input"
+            autocomplete="off"
+            required
+          />
+          <label class="signature-consent"
+            ><input type="checkbox" id="budgetDebitConsent" required />Je
+            confirme la dépense réelle du montant total, frais inclus. Le compte
+            sera débité immédiatement et le budget ne sera plus modifiable. Ce
+            n’est pas une simple approbation prévisionnelle.</label
+          >
+          <button class="btn btn-primary" type="submit">
+            Confirmer le débit réel
+          </button>
+        </form>
+      </div>
+    </div>
     <!-- Scripts -->
     <script src="/js/api.js"></script>
     <script src="/js/app.js"></script>
     <script src="/js/family.js"></script>
     <script src="/js/workspace.js"></script>
+    <script src="/js/budgets.js"></script>
   </body>
 </html>

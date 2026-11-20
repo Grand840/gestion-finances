@@ -29,7 +29,11 @@ def freeze(db, user, kind, resource):
         summary=[],
         sections=[],
     )
-    if kind == "loan":
+    if kind == "budget":
+        from budgets import fill_document
+
+        fill_document(db, user, resource, r)
+    elif kind == "loan":
         loan = store.owned(db, "loans", uid, resource)
         receipts = [
             row["snapshot"]
@@ -244,3 +248,18 @@ def freeze(db, user, kind, resource):
         json.dumps(r, ensure_ascii=False, sort_keys=True).encode()
     ).hexdigest()
     return r
+
+
+def issue(db, user, kind, resource):
+    """Freeze, seal and persist in the caller's atomic transaction/owner lock."""
+    from seals import apply_seal
+    from psycopg.types.json import Jsonb
+
+    snapshot = freeze(db, user, kind, resource)
+    apply_seal(db, user, snapshot)
+    db.execute(
+        "INSERT INTO documents(id,user_id,kind,reference,snapshot) VALUES (%s,%s,%s,%s,%s)",
+        [snapshot["id"], user["id"], kind, snapshot["reference"], Jsonb(snapshot)],
+    )
+    store.audit(db, user["id"], "documents.created", snapshot["id"])
+    return snapshot

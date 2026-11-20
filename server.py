@@ -25,8 +25,9 @@ from pydantic import BaseModel, Field, ConfigDict
 
 import database as store
 from receipts import build_pdf, build_report
-from documents import freeze
-from seals import apply_seal, proof, key_fingerprint
+from documents import freeze, issue
+import budgets
+from seals import proof, key_fingerprint
 from signatures import normalize_signature, IMAGE_ERRORS
 
 ROOT = Path(__file__).parent
@@ -54,7 +55,7 @@ async def lifespan(app):
 
 app = FastAPI(
     title="Sillage",
-    version="2.2.0",
+    version="2.3.0",
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,
@@ -621,6 +622,7 @@ def export(user=Depends(current_user)):
                 "funds",
                 "assets",
                 "receipts",
+                "budgets",
             )
         }
         return dict(
@@ -836,6 +838,53 @@ def person_detail(pid: str, user=Depends(current_user)):
         return freeze(db, user, "person", pid)
 
 
+@app.get("/api/budgets")
+def list_budgets(
+    status: str = "all",
+    q: str = "",
+    limit: int = 50,
+    offset: int = 0,
+    user=Depends(current_user),
+):
+    if (
+        status not in ("all", "draft", "validated", "cancelled")
+        or not 1 <= limit <= 100
+        or not 0 <= offset <= 10000000
+        or len(q) > 160
+    ):
+        raise HTTPException(422, "Filtres budgétaires invalides.")
+    with store.connect() as db:
+        clause = "user_id=%s AND (%s='all' OR status=%s) AND (strpos(lower(title||' '||reference||' '||project||' '||purpose),lower(%s))>0)"
+        args = [user["id"], status, status, q.strip()]
+        total = store.one(db, "SELECT count(*) n FROM budgets WHERE " + clause, args)[
+            "n"
+        ]
+        rows = store.rows(
+            db,
+            "SELECT id,reference,title,project,currency,budget_date,due_date,total,status,revision,created_at FROM budgets WHERE "
+            + clause
+            + " ORDER BY created_at DESC,id LIMIT %s OFFSET %s",
+            args + [limit, offset],
+        )
+    return dict(items=rows, total=total, limit=limit, offset=offset)
+
+
+@app.get("/api/budgets/{bid}")
+def budget_detail(bid: str, user=Depends(current_user)):
+    with store.connect() as db:
+        budget = store.owned(db, "budgets", user["id"], bid)
+        if budget["account_id"]:
+            budget["account_name"] = store.owned(
+                db, "accounts", user["id"], budget["account_id"]
+            )["name"]
+        budget["documents"] = store.rows(
+            db,
+            "SELECT id,reference,created_at,snapshot->>'title' title,snapshot->>'budget_revision' revision FROM documents WHERE user_id=%s AND kind='budget' AND snapshot->>'budget_id'=%s ORDER BY created_at DESC",
+            [user["id"], bid],
+        )
+    return budget
+
+
 @app.post("/api/documents")
 def create_document(data: dict, user=Depends(current_user)):
     consume_attempt("document:" + user["id"], 30)
@@ -845,19 +894,7 @@ def create_document(data: dict, user=Depends(current_user)):
         )
         if not latest["active"]:
             raise HTTPException(401, "Compte désactivé.")
-        snapshot = freeze(db, latest, data.get("kind"), data.get("resource_id"))
-        apply_seal(db, latest, snapshot)
-        db.execute(
-            "INSERT INTO documents(id,user_id,kind,reference,snapshot) VALUES (%s,%s,%s,%s,%s)",
-            [
-                snapshot["id"],
-                user["id"],
-                snapshot["kind"],
-                snapshot["reference"],
-                Jsonb(snapshot),
-            ],
-        )
-        store.audit(db, user["id"], "documents.created", snapshot["id"])
+        snapshot = issue(db, latest, data.get("kind"), data.get("resource_id"))
     return dict(id=snapshot["id"], reference=snapshot["reference"])
 
 
@@ -921,7 +958,9 @@ def mutate(path: str, data: dict, request: Request, user=Depends(current_user)):
                         409, "Clé déjà utilisée pour une autre opération."
                     )
                 return previous["response"]
-        if path in handlers:
+        if path == "budgets" or path.startswith("budgets/"):
+            result = budgets.mutate(db, latest, path, data)
+        elif path in handlers:
             result = handlers[path](db, latest, data)
         elif path == "settings":
             name = store.text(data.get("user_name"), 80)
@@ -945,10 +984,15 @@ def mutate(path: str, data: dict, request: Request, user=Depends(current_user)):
                         "SELECT id FROM assets WHERE user_id=%s LIMIT 1",
                         [user["id"]],
                     )
+                    or store.one(
+                        db,
+                        "SELECT id FROM budgets WHERE user_id=%s LIMIT 1",
+                        [user["id"]],
+                    )
                 ):
                     raise HTTPException(
                         422,
-                        "La devise est verrouillée après la première opération : aucune conversion automatique.",
+                        "La devise est verrouillée après le premier budget ou la première opération : aucune conversion automatique.",
                     )
                 db.execute(
                     "UPDATE accounts SET currency=%s WHERE user_id=%s",
@@ -987,7 +1031,11 @@ def mutate(path: str, data: dict, request: Request, user=Depends(current_user)):
         store.audit(
             db,
             user["id"],
-            path,
+            (
+                "budgets." + path.rsplit("/", 1)[1]
+                if path.startswith("budgets/")
+                else path
+            ),
             result.get("id") or data.get("loan_id") or data.get("fund_id"),
         )
         if key:

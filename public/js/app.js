@@ -307,6 +307,10 @@ const App = {
   },
 
   pages: {
+    budgets: [
+      "Budgets prévisionnels",
+      "Préparez vos projets sans toucher à vos comptes. Validez seulement quand la dépense est réelle.",
+    ],
     dashboard: [
       "Vue d’ensemble",
       "L’essentiel de vos finances, au même endroit.",
