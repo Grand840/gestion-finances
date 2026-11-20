@@ -484,7 +484,7 @@ def build_report(r):
             [Spacer(1, 12), compact(section["title"], 10, bold=True), Spacer(1, 6)]
         )
         n = len(section["columns"])
-        widths = (
+        widths = section.get("widths") or (
             [0.15, 0.42, 0.16, 0.11, 0.16]
             if n == 5
             else (

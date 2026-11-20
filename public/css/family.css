@@ -1764,3 +1764,283 @@ body.modal-open {
   color: #174f42;
   overflow-wrap: anywhere;
 }
+
+/* Forecast budgets: a calm planning space, separate from actual cash. */
+#view-budgets [hidden] {
+  display: none !important;
+}
+.budget-hero {
+  background: #edf4ee;
+  border: 1px solid #dbe7d9;
+  border-radius: 18px;
+  padding: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+.budget-hero h2 {
+  margin: 10px 0;
+  font-size: 1.6rem;
+  letter-spacing: -0.035em;
+}
+.budget-hero p {
+  color: #607363;
+  line-height: 1.7;
+  max-width: 620px;
+  font-size: 0.88rem;
+}
+.budget-hero .btn {
+  flex-shrink: 0;
+}
+.budget-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: end;
+  flex-wrap: wrap;
+  margin: 24px 0 16px;
+}
+.budget-toolbar label:first-child {
+  flex: 1;
+  min-width: 180px;
+}
+.budget-toolbar label,
+.budget-form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 0.8rem;
+  color: #52654f;
+  min-width: 0;
+}
+.budget-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 24px;
+  background: white;
+  border: 1px solid #e2e8dd;
+  border-radius: 14px;
+  margin: 12px 0;
+}
+.budget-card h3 {
+  margin: 12px 0 6px;
+  overflow-wrap: anywhere;
+}
+.budget-card p,
+.budget-card small {
+  color: #71816b;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+.budget-card-end {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-end;
+  gap: 18px;
+  flex-shrink: 0;
+}
+.budget-card-end > strong {
+  font-size: 1.3rem;
+  color: #174f42;
+}
+.budget-status {
+  display: inline-block;
+  padding: 5px 10px;
+  border-radius: 20px;
+  background: #f7efd9;
+  color: #87672e;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+.budget-status.validated {
+  background: #e5f1e6;
+  color: #22583d;
+}
+.budget-status.cancelled {
+  background: #efefeb;
+  color: #73776d;
+}
+.budget-empty {
+  padding: 48px 24px;
+  text-align: center;
+  border: 1px dashed #cad6c5;
+  border-radius: 16px;
+  color: #607363;
+  line-height: 1.8;
+}
+.budget-detail-panel {
+  padding: 26px;
+  margin-bottom: 22px;
+}
+.budget-detail-panel h2 {
+  margin: 16px 0;
+  overflow-wrap: anywhere;
+}
+.budget-detail-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+}
+.budget-detail-heading > strong {
+  font-size: 1.6rem;
+  color: #174f42;
+  flex-shrink: 0;
+}
+.budget-detail-heading p {
+  color: #71816b;
+  font-size: 0.8rem;
+}
+.budget-safety {
+  background: #f1f5ec;
+  border-left: 3px solid #7b9b6a;
+  border-radius: 5px;
+  padding: 15px;
+  line-height: 1.7;
+  font-size: 0.83rem;
+  color: #496044;
+  margin: 20px 0;
+}
+.budget-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  margin: 24px 0;
+}
+.budget-facts dt {
+  font-size: 0.73rem;
+  color: #7c8975;
+  margin-bottom: 7px;
+}
+.budget-facts dd {
+  margin: 0;
+  font-size: 0.88rem;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.budget-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+.budget-wide {
+  grid-column: 1/-1;
+}
+.budget-lines-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 30px 0 16px;
+}
+.budget-line {
+  min-width: 0;
+  padding: 20px;
+  margin: 18px 0;
+  border: 1px solid #dfe7d8;
+  border-radius: 12px;
+  background: #fbfcf8;
+}
+.budget-line legend {
+  padding: 0 8px;
+  color: #52694b;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.budget-line-total {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  font-size: 0.8rem;
+  color: #63785b;
+}
+.budget-line-total strong {
+  color: #174f42;
+  font-size: 1.15rem;
+  overflow-wrap: anywhere;
+}
+.budget-line .danger-link {
+  margin: 18px 0 0;
+}
+.budget-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 24px 0;
+  padding: 20px;
+  background: #174f42;
+  color: #fff;
+  border-radius: 10px;
+  font-size: 0.84rem;
+}
+.budget-summary strong {
+  font-size: 1.2rem;
+  overflow-wrap: anywhere;
+}
+.budget-detail-lines > article {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  border-bottom: 1px solid #e6ecdf;
+  padding: 18px 0;
+}
+.budget-detail-lines > article > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.budget-detail-lines p,
+.budget-detail-lines small {
+  color: #71816b;
+  font-size: 0.8rem;
+  line-height: 1.7;
+}
+.budget-detail-lines > article > strong {
+  flex-shrink: 0;
+  font-size: 0.9rem;
+}
+.budget-notes {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.87rem;
+  line-height: 1.8;
+}
+#budgetValidationForm .form-label {
+  margin-top: 18px;
+}
+@media (max-width: 650px) {
+  .budget-hero,
+  .budget-card,
+  .budget-detail-heading {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+  }
+  .budget-card-end {
+    align-items: flex-start;
+  }
+  .budget-form-grid,
+  .budget-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .budget-detail-panel,
+  .budget-hero,
+  .budget-card {
+    padding: 18px;
+  }
+  .budget-line {
+    padding: 14px;
+  }
+  .budget-lines-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .budget-detail-lines > article {
+    flex-wrap: wrap;
+  }
+}

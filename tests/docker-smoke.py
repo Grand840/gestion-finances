@@ -37,10 +37,10 @@ def main():
             assert not client.get("/api/auth/status").json()["authenticated"]
             auth = post(client, "auth/login", email=EMAIL, password=PASSWORD)
             client.headers["X-CSRF-Token"] = auth["csrf_token"]
-            assert client.get("/api/metrics").json()["real_available_cash"] == 950
+            assert client.get("/api/metrics").json()["real_available_cash"] == 925
             detail = client.get("/api/accounts/" + state["account"])
             assert (
-                detail.status_code == 200 and detail.json()["account"]["balance"] == 950
+                detail.status_code == 200 and detail.json()["account"]["balance"] == 925
             )
             receipt = client.get("/api/receipt/" + state["receipt"])
             assert receipt.status_code == 200
@@ -51,6 +51,30 @@ def main():
                 "/api/documents/" + state["document"] + "/pdf"
             ).content.startswith(b"%PDF-")
             assert client.get("/api/people").json()[0]["balance"] == 500
+            validated = client.get("/api/budgets/" + state["budget"]).json()
+            assert validated["status"] == "validated" and validated["total"] == 25
+            assert (
+                client.get("/api/budgets/" + state["forecast"]).json()["status"]
+                == "draft"
+            )
+            snapshot = client.get(
+                "/api/documents/" + state["budget_document"] + "/proof"
+            ).json()["snapshot"]
+            assert verify_snapshot(snapshot, state["key_fingerprint"])[
+                "signature_valid"
+            ]
+            assert (
+                client.post(
+                    "/api/budgets/" + state["budget"] + "/validate",
+                    json=dict(
+                        revision=validated["revision"],
+                        confirmation=validated["reference"],
+                        account_id=state["account"],
+                    ),
+                ).status_code
+                == 409
+            )
+            assert client.get("/api/metrics").json()["real_available_cash"] == 925
             for kind, identifier in [
                 ("receipt", state["receipt"]),
                 ("documents", state["document"]),
@@ -146,6 +170,36 @@ def main():
         assert client.get(
             "/api/documents/" + document["id"] + "/pdf"
         ).content.startswith(b"%PDF-")
+        draft = post(
+            client,
+            "budgets",
+            title="Projet Docker",
+            purpose="Préparation sans débit",
+            fees=5,
+            items=[dict(label="Achat CI", quantity=2, unit_price=10)],
+        )
+        assert client.get("/api/metrics").json()["real_available_cash"] == 950
+        forecast = post(
+            client,
+            "budgets",
+            title="Prévision conservée",
+            purpose="Ne pas débiter",
+            items=[dict(label="Futur achat", quantity=1, unit_price=50)],
+        )
+        budget = client.get("/api/budgets/" + draft["id"]).json()
+        approved = post(
+            client,
+            "budgets/" + draft["id"] + "/validate",
+            revision=budget["revision"],
+            confirmation=budget["reference"],
+            account_id=aid,
+        )
+        assert client.get("/api/metrics").json()["real_available_cash"] == 925
+        assert verify_snapshot(
+            client.get(
+                "/api/documents/" + approved["document"]["id"] + "/proof"
+            ).json()["snapshot"]
+        )["signature_valid"]
         invitation = post(client, "admin/invitations")["code"]
         post(client, "admin/invitations")
         with httpx.Client(base_url=client.base_url, timeout=15) as member:
@@ -167,6 +221,9 @@ def main():
                     account=aid,
                     receipt=rid,
                     document=document["id"],
+                    budget=draft["id"],
+                    forecast=forecast["id"],
+                    budget_document=approved["document"]["id"],
                     session=client.cookies.get("sillage_session"),
                     key_fingerprint=client.get("/api/profile/document-key").json()[
                         "key_fingerprint"

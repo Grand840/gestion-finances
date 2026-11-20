@@ -26,6 +26,9 @@ const vm = require("node:vm");
     "/api%2Fexport",
     "/api/receipt/id/pdf",
     "/private-report",
+    "/api/budgets",
+    "/api/budgets/id",
+    "/api/documents/id/proof",
     "/index.html?private=true",
   ]) {
     let promise;

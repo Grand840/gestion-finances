@@ -122,6 +122,7 @@ def owned(db, table, uid, resource, active=False):
         "receipts",
         "people",
         "documents",
+        "budgets",
     ):
         raise ValueError("Unknown resource")
     result = one(
